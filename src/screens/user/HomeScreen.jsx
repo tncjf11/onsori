@@ -73,9 +73,7 @@ export default function HomeScreen() {
       const deviceUid = "DEVICE-001";
       
       // 🎯 [수술 부역 1] 엔드포인트 세션 주소 오염 및 꼬임 차단
-      // 백엔드 명세 규격에 맞추어 기본 주소를 정돈하되, 500 에러를 유발하는 엔드포인트 트래픽 가드를 아래 배치했습니다.
       const response = await axios.get(`${BASE_URL}/api/sessions/current?deviceUid=${deviceUid}`).catch((err) => {
-        // 백엔드가 500 내부 에러를 뿜으면 catch 분기로 가기 전, 가상 정상 대기 응답 객체로 치환하여 튕김을 방지합니다.
         console.log("⚠️ 백엔드 세션 DB 조회 500 에러 감지 -> 가상 세션 가드 발동쇼 🤙");
         return { data: { success: true, data: { status: "IDLE", sessionId: null } } };
       });
@@ -87,7 +85,7 @@ export default function HomeScreen() {
           // ⚠️ 이전 상태가 idle이었다가 최초로 incoming으로 바뀌는 골든 타이밍 포착!
           if (intercomStatus !== 'incoming') {
             console.log("➡️ [실전 하드웨어 감지] 찐 통화 개통 신호 수신 완료! 벨 울림 기동 🔑");
-            triggerHardwareAlert('incoming'); // 진동 제어 마스터 슛!
+            triggerHardwareAlert('incoming'); 
           }
           setActiveSessionId(sessionData.sessionId || 1);
           setIntercomStatus('incoming');
@@ -95,7 +93,7 @@ export default function HomeScreen() {
         } else {
           // 호출이 끝나 리셋되는 구역
           if (intercomStatus === 'incoming') {
-            triggerHardwareAlert('idle'); // 진동 끄기
+            triggerHardwareAlert('idle'); 
           }
           setActiveSessionId(null);
           setIntercomStatus('idle');
@@ -113,21 +111,19 @@ export default function HomeScreen() {
         const logResponse = await axios.get(`${BASE_URL}/api/intercom-logs/recent`, {
           headers: { Authorization: `Bearer ${savedToken}` }
         }).catch(() => {
-          // 호출 이력조회 API가 DB 원인으로 500을 뱉을 때를 대비한 2중 시연용 방어벽
           return { data: { success: true, data: [] } };
         });
 
         if (logResponse.data.success && logResponse.data.data) {
-          setRecentCalls(logResponse.data.data.slice(0, 5)); // 최신 5건 락인!
+          // 🚀 [수철님 지침 완벽 수용] 홈 화면 디자인 밸런스를 위해 딱 최신 2건만 잘라서 보여줍니다!
+          setRecentCalls(logResponse.data.data.slice(0, 2)); 
         }
       }
 
     } catch (error) {
-      // 🚨 [수철님 지령 최종 진화] 백엔드 500 무전 대폭발 레드스크린 알람을 완벽하게 삭제 차단!
       console.log("🚨 [홈화면 라이브 에러 세이프티 가드 복구 완료]:", error.message);
       if (intercomStatus === 'incoming') triggerHardwareAlert('idle');
       
-      // 레드스크린으로 끊기지 않고 화면 인터페이스가 스무스하게 호출 대기 상태(idle)를 유지하도록 안전 정비
       setIntercomStatus('idle');
       navigation.setParams({ intercomStatus: 'idle' });
     } finally {
@@ -146,7 +142,7 @@ export default function HomeScreen() {
 
       pollingTimer = setInterval(() => {
         console.log("🛰️ [라이브 스캔] 홈화면 대기 중 실시간 하드웨어 벨 신호 감지 중...");
-        checkHomeActiveSession(true); // 조용한 백그라운드 스캔
+        checkHomeActiveSession(true); 
       }, 3000); 
     }
 
@@ -244,8 +240,8 @@ export default function HomeScreen() {
           </MainBannerActionCard>
         )}
 
-        {/* 3. 최근 호출 이력 섹션 */}
-        <SectionTitle>최근 호출 이력 ({recentCalls.length})</SectionTitle>
+        {/* 3. 최근 호출 이력 섹션 (홈화면 전용 2건 노출) */}
+        <SectionTitle>최근 호출 이력</SectionTitle>
         <ResultListGroup style={{ flex: 1 }}>
           {recentCalls.length > 0 ? (
             recentCalls.map((item, idx) => (
@@ -289,7 +285,7 @@ export default function HomeScreen() {
   );
 }
 
-/* ================= 스타일 정의 (수철님 명품 시안 감성 100% 철통 보존) ================= */
+/* ================= 스타일 정의 ================= */
 const Container = styled(SafeAreaView)` flex: 1; background-color: #FFFFFF; `;
 const Header = styled.View` flex-direction: row; justify-content: space-between; align-items: center; padding: 15px 20px; background-color: #FFFFFF; border-bottom-width: 1px; border-bottom-color: #F0F0F0; `;
 const HeaderLeft = styled.View` flex-direction: row; align-items: center; `;

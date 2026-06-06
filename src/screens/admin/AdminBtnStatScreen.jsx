@@ -1,71 +1,95 @@
 import React, { useState, useEffect } from "react";
-import { ScrollView, TouchableOpacity, View, ActivityIndicator, Alert } from "react-native";
+import { ScrollView, TouchableOpacity, View, ActivityIndicator, Modal } from "react-native";
 import styled from "styled-components/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation, useIsFocused } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import axios from "axios";
-
-// 📥 관리자 전용 마스터 키 로드를 위한 비밀금고 부품 임포트!
 import AsyncStorage from "@react-native-async-storage/async-storage";
-
-// 🌐 config.js의 배포 주소
 import BASE_URL from "../../api/config";
 
-// ✅ 이미지 에셋 (순정 보존 🤙)
+// 📅 찐 달력 부품 및 한국어 패치 세팅
+import { Calendar, LocaleConfig } from 'react-native-calendars';
+
+LocaleConfig.locales['kr'] = {
+  monthNames: ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'],
+  monthNamesShort: ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'],
+  dayNames: ['일요일','월요일','화요일','수요일','목요일','금요일','토요일'],
+  dayNamesShort: ['일','월','화','수','목','금','토'],
+  today: '오늘'
+};
+LocaleConfig.defaultLocale = 'kr';
+
 const backIcon = require("../../assets/back_icon.png");
 
 export default function AdminBtnStatScreen() {
   const navigation = useNavigation();
-  const isFocused = useIsFocused(); // 📱 화면 재진입 시 강제 리프레시 센서
+  const isFocused = useIsFocused();
   
-  // 1. 필터 상태 관리 (전체: 'all', 24시간: '24h', 3일: '3d') - 순정 인터페이스 유지
-  const [activeFilter, setActiveFilter] = useState("all");
+  // 🕒 한국 표준시(KST) 기준 오늘 날짜 계산 유틸
+  const getTodayKST = () => {
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+    const kst = new Date(utc + (9 * 60 * 60 * 1000));
+    return kst.toISOString().split('T')[0];
+  };
 
-  // 📱 백엔드 기지국에서 수급해올 찐 상용구 통계 리스트 상태창
+  const [selectedDate, setSelectedDate] = useState(getTodayKST());
+  const [isDateModalVisible, setIsDateModalVisible] = useState(false);
+
+  // 📱 통계 리스트 및 계산용 상태창
   const [btnStats, setBtnStats] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
-
-  // 📊 실시간 하이라이트 추적용 상태창 (최대/최소 자동 산출)
   const [highestBtn, setHighestBtn] = useState(null);
   const [lowestBtn, setLowestBtn] = useState(null);
 
   // =========================================================
-  // 🔥 [재호 찐 상용구 통계 컨트롤러 연동] 라이브 통계 분석 엔진 🚀
+  // 🔥 [명세서 7-2] 라이브 통계 분석 엔진 🚀
   // =========================================================
   const fetchStatistics = async () => {
     try {
       setIsLoading(true);
-      console.log("▶️ [버튼 통계] 금고 내부 마스터 신분증 로드 중... 🔑");
-      
       const token = await AsyncStorage.getItem("adminToken");
       if (!token) {
         navigation.navigate("AdminLogin");
         return;
       }
 
-      // 🎯 [명세서 찐 연동] GET /api/admin/quick-replies/statistics 정격 타격!
       const response = await axios.get(`${BASE_URL}/api/admin/quick-replies/statistics`, {
+        params: { date: selectedDate }, // 날짜 필터가 지원될 경우를 대비
         headers: { Authorization: `Bearer ${token}` }
       });
-
-      console.log("▶️ [버튼 통계 수신 완료] 응답 원본 확인:", response.data);
 
       if (response.data.success && response.data.data) {
         const rawStats = response.data.data;
         
-        // 🧮 [뇌지컬 실시간 통계 카운팅 및 하이라이트 연산 엔진]
-        // 1. 총 선택 횟수 실시간 누적 합산 계산
-        const sum = rawStats.reduce((acc, curr) => acc + (curr.count || 0), 0);
-        setTotalCount(sum);
-        setBtnStats(rawStats);
+        // 🧮 1. 고유 번호 맵핑 및 총합 계산 (useCount 사용!)
+        let sum = 0;
+        const mappedStats = rawStats.map((item, idx) => {
+          // 🚀 핵심: 명세서상 횟수 필드는 'useCount' 입니다.
+          const countVal = item.useCount || 0; 
+          sum += countVal;
+          return {
+            ...item,
+            displayNo: item.replyCode || item.quickReplyId || idx + 1 
+          };
+        });
 
-        if (rawStats.length > 0) {
-          // count 수치 기준으로 줄 세우기 소팅 돌려서 최대/최소 자동 추출!
-          const sortedList = [...rawStats].sort((a, b) => (b.count || 0) - (a.count || 0));
-          setHighestBtn(sortedList[0]); // 가장 높은 수치
-          setLowestBtn(sortedList[sortedList.length - 1]); // 가장 낮은 수치
+        // 백분율(percent) 계산 로직 추가
+        const finalStats = mappedStats.map(item => ({
+          ...item,
+          percent: sum > 0 ? ((item.useCount || 0) / sum) * 100 : 0
+        }));
+
+        setTotalCount(sum);
+        setBtnStats(finalStats);
+
+        // 🧮 2. 최대/최소 하이라이트 연산 (useCount 기준 정렬)
+        if (finalStats.length > 0) {
+          const sortedList = [...finalStats].sort((a, b) => (b.useCount || 0) - (a.useCount || 0));
+          setHighestBtn(sortedList[0]);
+          setLowestBtn(sortedList[sortedList.length - 1]);
         }
       }
     } catch (error) {
@@ -79,132 +103,184 @@ export default function AdminBtnStatScreen() {
     if (isFocused) {
       fetchStatistics();
     }
-  }, [isFocused, activeFilter]); // 필터 단추 누를 때도 연동 연전 기동!
+  }, [isFocused, selectedDate]);
 
   return (
     <Container>
-      {/* 3. 헤더 영역 */}
+      {/* 1. 헤더 영역 */}
       <Header>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <BackIcon source={backIcon} resizeMode="contain" />
         </TouchableOpacity>
-        <HeaderTitle>버튼 응답 빈도 통계</HeaderTitle>
+        <HeaderTitle>버튼 응답 빈도</HeaderTitle>
         <View style={{ width: 24 }} />
       </Header>
 
+      {/* 2. 초록색 날짜 선택 컨트롤러 (시안 100% 반영) */}
+      <DateControlSection>
+        <DateDisplayBox>
+          <DateDisplayText>{selectedDate.replace(/-/g, '/')}</DateDisplayText>
+        </DateDisplayBox>
+        <DateSelectButton onPress={() => setIsDateModalVisible(true)} activeOpacity={0.8}>
+          <DateSelectButtonText>날짜 선택</DateSelectButtonText>
+        </DateSelectButton>
+      </DateControlSection>
+
       {isLoading ? (
         <LoadingWrapper>
-          <ActivityIndicator size="large" color="#06F393" />
-          <LoadingText>기지국 상용구 선택 트래픽 장부 집계 중...</LoadingText>
+          <ActivityIndicator size="large" color="#1EC949" />
+          <LoadingText>통계 집계 중...</LoadingText>
         </LoadingWrapper>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false}>
-          {/* 4. 필터 토글 그룹 (순정 핏 100% 보존 뽈칵! 🤙) */}
-          <FilterGroup>
-            <FilterBtn active={activeFilter === "all"} onPress={() => setActiveFilter("all")}>
-              <FilterText active={activeFilter === "all"}>전체</FilterText>
-            </FilterBtn>
-            <FilterBtn active={activeFilter === "24h"} onPress={() => setActiveFilter("24h")}>
-              <FilterText active={activeFilter === "24h"}>최근 24시간</FilterText>
-            </FilterBtn>
-            <FilterBtn active={activeFilter === "3d"} onPress={() => setActiveFilter("3d")}>
-              <FilterText active={activeFilter === "3d"}>최근 3일</FilterText>
-            </FilterBtn>
-          </FilterGroup>
-
-          {/* 5. 메인 통계 카드 (실시간 동적 결합 완착! 🤙) */}
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+          
+          {/* 3. 메인 통계 카드 */}
           <StatCard>
             <CardTopRow>
-              <CardMainTitle>총 선택 누적 횟수</CardMainTitle>
+              <CardMainTitle>총 선택 횟수</CardMainTitle>
               <CardMainCount>{totalCount}회</CardMainCount>
             </CardTopRow>
             
             <SubTitleRow>
-              <Ionicons name="bar-chart-outline" size={18} color="#333" />
-              <SubTitleText>버튼별 실시간 선택 명세</SubTitleText>
+              <Ionicons name="bar-chart-outline" size={20} color="#333" />
+              <SubTitleText>버튼 별 선택 횟수</SubTitleText>
             </SubTitleRow>
 
-            {/* 데이터 리스트 가변 바인딩 */}
             {btnStats.length > 0 ? (
               btnStats.map((item, idx) => (
-                <StatRow key={item.quickReplyId || item.id || idx}>
-                  <RowId>{item.quickReplyId || idx + 1}.</RowId>
-                  <RowText>{item.text || item.content || "상용구 문구 없음"}</RowText>
-                  <RowCount>{item.count || 0}회</RowCount>
+                <StatRow key={item.displayNo || idx}>
+                  <RowText>{item.displayNo}. {item.text || item.content || "상용구 문구 없음"}</RowText>
+                  <RowCount>{item.useCount || 0}회</RowCount>
                   <RowPercent>{item.percent ? item.percent.toFixed(1) : "0.0"}%</RowPercent>
                 </StatRow>
               ))
             ) : (
-              <EmptyText>집계된 상용구 발포 이력이 없쇼.</EmptyText>
+              <EmptyText>해당 날짜에 집계된 통계가 없습니다.</EmptyText>
             )}
           </StatCard>
 
-          {/* 6. 하이라이트 카드 (수학 계산식 기반 라이브 동적 산출 대부활! 뽈칵! 🤙) */}
+          {/* 4. 최다/최소 하이라이트 카드 */}
           <HighlightCard>
-            <HighlightRow>
-              <Ionicons name="checkmark-circle" size={18} color="#06F393" />
-              <HighlightTitle color="#06F393">가장 많이 선택된 버튼</HighlightTitle>
-            </HighlightRow>
-            {highestBtn ? (
-              <StatRow style={{ borderBottomWidth: 1, borderBottomColor: '#F5F5F5', marginBottom: 15, paddingBottom: 10 }}>
-                <RowId>{highestBtn.quickReplyId || "★"}.</RowId>
-                <RowText>{highestBtn.text || highestBtn.content}</RowText>
-                <RowCount>{highestBtn.count || 0}회</RowCount>
-                <RowPercent>{highestBtn.percent ? highestBtn.percent.toFixed(1) : "0.0"}%</RowPercent>
-              </StatRow>
-            ) : (
-              <RowText style={{ color: "#BBB", marginBottom: 15 }}>데이터 수급 공백</RowText>
-            )}
+            <HighlightSection style={{ borderBottomWidth: 1, borderBottomColor: '#F0F0F0', paddingBottom: 15, marginBottom: 15 }}>
+              <HighlightRow>
+                <Ionicons name="add-circle-outline" size={20} color="#1EC949" />
+                <HighlightTitle color="#555">최다 선택 버튼</HighlightTitle>
+              </HighlightRow>
+              {highestBtn ? (
+                <HighlightDataRow>
+                  <RowText style={{ marginLeft: 5 }}>{highestBtn.displayNo}. {highestBtn.text || highestBtn.content}</RowText>
+                  <RowCount>{highestBtn.useCount || 0}회</RowCount>
+                  <RowPercent>{highestBtn.percent ? highestBtn.percent.toFixed(1) : "0.0"}%</RowPercent>
+                </HighlightDataRow>
+              ) : (
+                <RowText style={{ color: "#BBB", marginLeft: 5 }}>데이터 없음</RowText>
+              )}
+            </HighlightSection>
 
-            <HighlightRow>
-              <Ionicons name="alert-circle" size={18} color="#FF5C00" />
-              <HighlightTitle color="#FF5C00">가장 적게 선택된 버튼</HighlightTitle>
-            </HighlightRow>
-            {lowestBtn ? (
-              <StatRow style={{ borderBottomWidth: 0 }}>
-                <RowId>{lowestBtn.quickReplyId || "☆"}.</RowId>
-                <RowText>{lowestBtn.text || lowestBtn.content}</RowText>
-                <RowCount>{lowestBtn.count || 0}회</RowCount>
-                <RowPercent>{lowestBtn.percent ? lowestBtn.percent.toFixed(1) : "0.0"}%</RowPercent>
-              </StatRow>
-            ) : (
-              <RowText style={{ color: "#BBB" }}>데이터 수급 공백</RowText>
-            )}
+            <HighlightSection>
+              <HighlightRow>
+                <Ionicons name="remove-circle-outline" size={20} color="#FF5C5C" />
+                <HighlightTitle color="#555">최소 선택 버튼</HighlightTitle>
+              </HighlightRow>
+              {lowestBtn ? (
+                <HighlightDataRow>
+                  <RowText style={{ marginLeft: 5 }}>{lowestBtn.displayNo}. {lowestBtn.text || lowestBtn.content}</RowText>
+                  <RowCount>{lowestBtn.useCount || 0}회</RowCount>
+                  <RowPercent>{lowestBtn.percent ? lowestBtn.percent.toFixed(1) : "0.0"}%</RowPercent>
+                </HighlightDataRow>
+              ) : (
+                <RowText style={{ color: "#BBB", marginLeft: 5 }}>데이터 없음</RowText>
+              )}
+            </HighlightSection>
           </HighlightCard>
+
         </ScrollView>
       )}
+
+      {/* 📅 달력 격자판 팝업 모달 */}
+      <Modal transparent={true} visible={isDateModalVisible} animationType="fade" onRequestClose={() => setIsDateModalVisible(false)}>
+        <ModalOverlay activeOpacity={1} onPress={() => setIsDateModalVisible(false)}>
+          <CalendarContainer activeOpacity={1}>
+            <CalendarHeader>
+              <ModalTitle>📅 날짜 선택</ModalTitle>
+              <TouchableOpacity onPress={() => setIsDateModalVisible(false)}>
+                <Ionicons name="close" size={26} color="#333" />
+              </TouchableOpacity>
+            </CalendarHeader>
+            
+            <Calendar
+              current={selectedDate}
+              onDayPress={(day) => {
+                setSelectedDate(day.dateString);
+                setIsDateModalVisible(false);
+              }}
+              markedDates={{
+                [selectedDate]: { selected: true, disableTouchEvent: true }
+              }}
+              theme={{
+                backgroundColor: '#ffffff',
+                calendarBackground: '#ffffff',
+                textSectionTitleColor: '#b6c1cd',
+                selectedDayBackgroundColor: '#1EC949',
+                selectedDayTextColor: '#ffffff',
+                todayTextColor: '#1EC949',
+                dayTextColor: '#2d4150',
+                textDisabledColor: '#d9e1e8',
+                arrowColor: '#1EC949',
+                monthTextColor: '#333',
+                textMonthFontWeight: 'bold',
+                textDayFontSize: 15,
+                textMonthFontSize: 18,
+                textDayHeaderFontSize: 14
+              }}
+            />
+          </CalendarContainer>
+        </ModalOverlay>
+      </Modal>
+
     </Container>
   );
 }
 
-/* ================= 스타일 정의 (수철님 명품 시안 컴포넌트 100% 철통 보존 🤙) ================= */
-const Container = styled(SafeAreaView)` flex: 1; background-color: #F8F9FA; `;
-const Header = styled.View` flex-direction: row; justify-content: space-between; align-items: center; padding: 15px 20px; background-color: #fff; border-bottom-width: 1px; border-bottom-color: #F0F0F0; `;
+/* ================= 스타일 정의 (시안 100% 반영) ================= */
+const Container = styled(SafeAreaView)` flex: 1; background-color: #F4F5F7; `;
+const Header = styled.View` flex-direction: row; justify-content: space-between; align-items: center; padding: 15px 20px; background-color: #F4F5F7; `;
 const BackIcon = styled.Image` width: 24px; height: 24px; `;
-const HeaderTitle = styled.Text` font-size: 18px; font-weight: 800; color: #333; `;
+const HeaderTitle = styled.Text` font-size: 20px; font-weight: 800; color: #333; `;
 
-const FilterGroup = styled.View` flex-direction: row; padding: 20px; `;
-const FilterBtn = styled.TouchableOpacity` background-color: ${props => props.active ? "#06F393" : "#FFF"}; border-width: 1px; border-color: #06F393; padding: 8px 15px; border-radius: 20px; margin-right: 10px; `;
-const FilterText = styled.Text` color: ${props => props.active ? "#FFF" : "#06F393"}; font-size: 14px; font-weight: 700; `;
+/* 📅 날짜 컨트롤러 UI */
+const DateControlSection = styled.View` flex-direction: row; align-items: center; padding: 10px 20px 20px; `;
+const DateDisplayBox = styled.View` padding: 8px 16px; border-width: 1.5px; border-color: #1EC949; border-radius: 20px; background-color: #fff; margin-right: 12px; `;
+const DateDisplayText = styled.Text` font-size: 15px; font-weight: 700; color: #1EC949; `;
+const DateSelectButton = styled.TouchableOpacity` padding: 9px 18px; background-color: #1EC949; border-radius: 20px; `;
+const DateSelectButtonText = styled.Text` font-size: 15px; font-weight: 700; color: #fff; `;
 
-const StatCard = styled.View` background-color: #fff; margin: 0 15px 15px; padding: 20px; border-radius: 25px; border-width: 1.5px; border-color: #06F393; `;
-const CardTopRow = styled.View` flex-direction: row; justify-content: space-between; align-items: center; padding-bottom: 15px; border-bottom-width: 1px; border-bottom-color: #EEE; `;
-const CardMainTitle = styled.Text` font-size: 18px; font-weight: 800; color: #333; `;
-const CardMainCount = styled.Text` font-size: 18px; font-weight: 700; color: #06F393; `;
+/* 📊 카드 디자인 */
+const StatCard = styled.View` background-color: #fff; margin: 0 15px 15px; padding: 20px; border-radius: 20px; elevation: 2; shadow-color: #000; shadow-opacity: 0.05; shadow-radius: 5px; `;
+const CardTopRow = styled.View` flex-direction: row; justify-content: space-between; align-items: center; padding-bottom: 15px; border-bottom-width: 1px; border-bottom-color: #F0F0F0; `;
+const CardMainTitle = styled.Text` font-size: 16px; font-weight: 600; color: #444; `;
+const CardMainCount = styled.Text` font-size: 16px; font-weight: 600; color: #333; `;
 
-const SubTitleRow = styled.View` flex-direction: row; align-items: center; margin: 15px 0; `;
-const SubTitleText = styled.Text` font-size: 16px; font-weight: 700; color: #333; margin-left: 8px; `;
+const SubTitleRow = styled.View` flex-direction: row; align-items: center; margin: 15px 0 10px; `;
+const SubTitleText = styled.Text` font-size: 15px; font-weight: 700; color: #333; margin-left: 8px; `;
 
-const StatRow = styled.View` flex-direction: row; align-items: center; padding: 11px 0; border-bottom-width: 1px; border-bottom-color: #FAFAFA; `;
-const RowId = styled.Text` width: 30px; font-size: 14px; color: #718096; font-weight: 600; `;
-const RowText = styled.Text` flex: 1; font-size: 14px; color: #2D3748; font-weight: 600; `;
-const RowCount = styled.Text` width: 60px; font-size: 14px; color: #333; text-align: right; font-weight: 700; `;
-const RowPercent = styled.Text` width: 60px; font-size: 14px; color: #4A90E2; text-align: right; font-weight: 600; `;
+const StatRow = styled.View` flex-direction: row; align-items: center; padding: 12px 0; border-bottom-width: 1px; border-bottom-color: #F0F0F0; border-style: dashed; `;
+const RowText = styled.Text` flex: 1; font-size: 14px; color: #444; font-weight: 500; `;
+const RowCount = styled.Text` width: 50px; font-size: 14px; color: #444; text-align: right; font-weight: 600; `;
+const RowPercent = styled.Text` width: 60px; font-size: 14px; color: #4A90E2; text-align: right; font-weight: 500; `;
 
-const HighlightCard = styled(StatCard)` border-color: #06F393; `;
-const HighlightRow = styled.View` flex-direction: row; align-items: center; margin-bottom: 10px; `;
-const HighlightTitle = styled.Text` font-size: 15px; font-weight: 800; color: ${props => props.color}; margin-left: 8px; `;
+const HighlightCard = styled(StatCard)``;
+const HighlightSection = styled.View``;
+const HighlightRow = styled.View` flex-direction: row; align-items: center; margin-bottom: 8px; `;
+const HighlightTitle = styled.Text` font-size: 15px; font-weight: 600; color: ${props => props.color}; margin-left: 6px; `;
+const HighlightDataRow = styled.View` flex-direction: row; align-items: center; `;
 
-const LoadingWrapper = styled.View` flex: 1; justify-content: center; align-items: center; padding-top: 100px; `;
+const LoadingWrapper = styled.View` flex: 1; justify-content: center; align-items: center; padding-top: 50px; `;
 const LoadingText = styled.Text` font-size: 13px; color: #718096; font-weight: 600; margin-top: 12px; `;
 const EmptyText = styled.Text` font-size: 14px; color: #BBB; font-weight: 600; text-align: center; padding: 20px 0; `;
+
+/* 📅 모달 및 달력 전용 스타일 */
+const ModalOverlay = styled.TouchableOpacity` flex: 1; background-color: rgba(0,0,0,0.4); justify-content: center; align-items: center; `;
+const CalendarContainer = styled.TouchableOpacity` width: 90%; background-color: white; border-radius: 24px; padding: 20px; overflow: hidden; `;
+const CalendarHeader = styled.View` flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 5px; `;
+const ModalTitle = styled.Text` font-size: 18px; font-weight: 800; color: #111; `;

@@ -1,6 +1,4 @@
-// 🤙 src/api/config.js
-
-// const BASE_URL = "http://localhost:8080"; 
-const BASE_URL = "https://voicenotice-backend.onrender.com";
+// 수정할 내용
+const BASE_URL = "http://13.209.8.169:8080";
 
 export default BASE_URL;

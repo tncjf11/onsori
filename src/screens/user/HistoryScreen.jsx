@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from "react";
-import { ScrollView, View, ActivityIndicator, TouchableOpacity } from "react-native";
-import styled from "styled-components/native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation, useIsFocused } from "@react-navigation/native";
-import { Ionicons } from "@expo/vector-icons"; 
+import { Ionicons } from "@expo/vector-icons";
+import { useIsFocused, useNavigation } from "@react-navigation/native";
 import axios from "axios";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, ScrollView, TouchableOpacity } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import styled from "styled-components/native";
 
 // 📥 [재호 지침 3번 반영] 핸드폰 내부 저장소 핵심 부품 전격 임포트!
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -40,8 +40,6 @@ export default function HistoryScreen() {
       const now = new Date();
       const logTime = new Date(isoString);
       
-      // 🎯 백엔드가 보낸 타임스탬프가 UTC(영국 표준시) 기준이라서 9시간 시차가 발생할 경우,
-      // 자동으로 9시간(9 * 60 * 60 * 1000 ms)을 더해 한국 시간(KST) 축으로 완벽 자석 피팅!
       const isUtc = !isoString.includes("+09") && (isoString.endsWith("Z") || isoString.includes("T"));
       const kstLogTime = isUtc ? new Date(logTime.getTime() + 9 * 60 * 60 * 1000) : logTime;
 
@@ -58,7 +56,6 @@ export default function HistoryScreen() {
       if (diffDays === 1) return "어제";
       if (diffDays <= 7) return `${diffDays}일 전`;
       
-      // 🎯 [시차 버그 소탕] 먼 옛날 데이터도 한국 시차가 완전히 반영된 객체에서 날짜를 정확히 슬라이싱합니다.
       const year = kstLogTime.getFullYear();
       const month = String(kstLogTime.getMonth() + 1).padStart(2, "0");
       const day = String(kstLogTime.getDate()).padStart(2, "0");
@@ -77,40 +74,34 @@ export default function HistoryScreen() {
       setIsLoading(true);
       console.log("▶️ [재호 지침 적용] AsyncStorage에서 찐 로그인 토큰 추출 시작... 🔑");
       
-      // A) 휴대폰 기기 내부에 저장되어 있는 진짜 accessToken을 직접 낚아챕니다!
       const savedToken = await AsyncStorage.getItem("accessToken");
       
       if (!savedToken) {
-        console.log("❌ 저장된 accessToken 없음 ➔ 목록 초기화 및 가드 발동");
         setHistoryData([]);
         setIsLoading(false);
         return;
       }
 
-      // B) 상세방 워프 릴레이를 위해 상태창에 토큰 값 박제 쇼!
       setToken(savedToken);
 
-      console.log("▶️ [명세서 8-1 진짜 요청] 로컬 토큰 헤더에 실어서 목록 조회 슛! 🎯");
       const response = await axios.get(`${BASE_URL}/api/intercom-logs`, {
         headers: { Authorization: `Bearer ${savedToken}` }
       });
       
-      console.log("▶️ [명세서 8-1 응답 수신] 히스토리 아카이브 목록 복원 완료! 👇");
-
       if (response.data.success && response.data.data) {
         const rawLogs = response.data.data;
 
         if (rawLogs.length > 0) {
-          // 🎯 [1번 및 3번 버그 완파 지령 마감]
-          // 1. .reverse()를 결합하여 백엔드가 준 배열을 거꾸로 뒤집어 최신 통화가 무조건 맨 위에 오도록 요격했습니다.
-          // 2. log.summary가 비어있거나 "내용 없음" 오염 상태일 때 "인터폰 호출 알림" 디폴트 명찰 가드를 칩니다.
-          const mappedLogs = [...rawLogs].reverse().map(log => ({
-            id: log.id,
-            title: log.summary && log.summary.trim() !== "내용 없음" ? log.summary : "인터폰 호출 알림",
-            time: formatTimeGap(log.createdAt), 
-            type: log.intent === "DELIVERY" ? "message" : "bell", 
-            tags: log.intent ? [log.intent] : ["방문"]
-          }));
+          // 🚀 [순서 정렬 완벽 해결] 백엔드가 어떻게 주든 상관없이 'createdAt' 기준으로 무조건 최신 시간이 맨 위로(내림차순) 정렬!
+          const mappedLogs = [...rawLogs]
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+            .map(log => ({
+              id: log.id,
+              title: log.summary && log.summary.trim() !== "내용 없음" ? log.summary : "인터폰 호출 알림",
+              time: formatTimeGap(log.createdAt), 
+              type: log.intent === "DELIVERY" ? "message" : "bell", 
+              tags: log.intent ? [log.intent] : ["방문"]
+            }));
           
           setHistoryData(mappedLogs);
         } else {
@@ -120,7 +111,7 @@ export default function HistoryScreen() {
         setHistoryData([]);
       }
     } catch (error) {
-      console.error("🚨 [명세서 8-1 에러] 히스토리 내역 로드 실패:", error.message);
+      console.error("🚨 [명세서 8-1 에러]:", error.message);
       setHistoryData([]);
     } finally {
       setIsLoading(false);
@@ -135,26 +126,20 @@ export default function HistoryScreen() {
 
   return (
     <Container>
-      {/* 1. 상단 헤더 */}
       <Header>
         <HeaderLeft>
           <Logo source={bellIcon} resizeMode="contain" />
           <HeaderTitle>히스토리</HeaderTitle>
         </HeaderLeft>
-        
-        <TouchableOpacity 
-          activeOpacity={0.7} 
-          onPress={() => navigation.navigate("HistorySearch")}
-        >
+        <TouchableOpacity activeOpacity={0.7} onPress={() => navigation.navigate("HistorySearch")}>
           <SearchBtnIcon source={searchIcon} resizeMode="contain" />
         </TouchableOpacity>
       </Header>
 
-      {/* 2. 호출 기록 리스트 영역 */}
       {isLoading ? (
         <LoadingWrapper>
           <ActivityIndicator size="large" color="#06F393" />
-          <LoadingText>그동안 쌓인 대화 기록 복원 중...</LoadingText>
+          <LoadingText>기록 복원 중...</LoadingText>
         </LoadingWrapper>
       ) : historyData.length > 0 ? (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 90 }}>
@@ -163,6 +148,7 @@ export default function HistoryScreen() {
               key={item.id} 
               item={item} 
               token={token || "READY"} 
+              // 🎯 [상세방 워프 기능] logId를 상세 페이지(End)로 정확히 실어 보냅니다!
               onPress={() => navigation.navigate("End", { item: item, logId: item.id, token: token })}
             />
           ))}

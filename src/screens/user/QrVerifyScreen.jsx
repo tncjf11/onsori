@@ -77,7 +77,7 @@ export default function QrVerifyScreen({ navigation, route }) {
     } catch (error) {
       console.log("🚨 서버 500 에러 혹은 통신 예외 발생 ➔ 시연 연속성을 위한 세션 상태 보존 처리");
 
-      // 서버 환경의 한시적 찐빠 상태에서도 테스트가 끊기지 않도록 영구 금고 장부에 동기화 스탬프를 찍어줍니다.
+      // 서버 환경의 한시적 문제에서도 테스트가 끊기지 않도록 영구 금고 장부에 동기화 스탬프를 찍어줍니다.
       if (realJwtToken) {
         await AsyncStorage.setItem("accessToken", realJwtToken);
       }
@@ -89,7 +89,7 @@ export default function QrVerifyScreen({ navigation, route }) {
     }
   };
 
-  // 🎯 딥링크 스키마 가위질 파서 (보존 완비)
+  // 🎯 딥링크 스키마 가위질 파서
   const handleBarCodeScanned = ({ data }) => {
     setScanned(true); 
     console.log("📥 [스캐너 원문 수신 로그]:", data);
@@ -176,7 +176,6 @@ export default function QrVerifyScreen({ navigation, route }) {
   );
 }
 
-/* ================= 스타일 정의 (순정 100% 철통 보존) ================= */
 const Container = styled.View` flex: 1; background-color: white; align-items: center; justify-content: center; `;
 const Header = styled.View` margin-bottom: 40px; `;
 const TitleText = styled.Text` font-size: 24px; font-weight: 800; color: #333; `;

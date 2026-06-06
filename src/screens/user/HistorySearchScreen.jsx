@@ -5,7 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation, useIsFocused } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons"; 
 
-// 📥 [수철님 지령 완벽 해소] 최근 검색어 장부를 폰 서랍장에 저축하기 위한 비밀금고 임포트! 🔑
+// 📥 최근 검색어 장부를 폰 서랍장에 저축하기 위한 비밀금고 임포트! 🔑
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ✅ 이미지 에셋 경로 매핑 (순정 100% 보존 🤙)
@@ -20,25 +20,47 @@ export default function HistorySearchScreen() {
   const isFocused = useIsFocused(); // 📱 화면 다시 돌아왔을 때 최근 검색어 리프레시 센서
 
   const [searchText, setSearchText] = useState("");
-  const [selectedDate, setSelectedDate] = useState("2026-05-15"); 
-  const [calendarModalVisible, setCalendarModalVisible] = useState(false); 
+  // 🚀 초기 날짜 상태는 빈 문자열로 시작 (모달에서 선택 시 채워짐)
+  const [selectedDateLabel, setSelectedDateLabel] = useState("전체 기간");
+  const [selectedDateRange, setSelectedDateRange] = useState(null);
   
-  // 🤙 초기 선택 키워드는 아무것도 없는 깨끗한 상태로 대기!
+  const [calendarModalVisible, setCalendarModalVisible] = useState(false); 
   const [selectedKeywords, setSelectedKeywords] = useState([]); 
-
-  // 💾 [실전 프론트 동적 키워드 보관창] - 처음엔 당연히 깨끗하게 빈 배열로 시동 대기! 🤙
   const [liveSavedKeywords, setLiveSavedKeywords] = useState([]);
 
-  // 태그 데이터 목록 (첫 번째 '최근 저장된 키워드'는 liveSavedKeywords 가변 데이터로 동적 교체 작동!)
+  // 태그 데이터 목록
   const categories = [
-    { title: "최근 저장된 키워드", data: liveSavedKeywords }, // 🎯 가변 엔진 락인!
+    { title: "최근 저장된 키워드", data: liveSavedKeywords },
     { title: "방문 유형", data: ["관리실", "택배", "배달", "방문판매", "공사/점검", "지인/가족", "미확인"] },
     { title: "상황 성격", data: ["미응답", "긴급", "공지", "확인요청"] },
     { title: "세부 키워드", data: ["식품", "점검", "수리", "요금/부과", "서류/카드", "안내/통지", "방문예약"] }
   ];
 
-  // 졸작 시연 발표용 가변형 날짜 세트
-  const dummyDates = ["2026-05-15", "2026-05-20", "2026-05-25", "2026-05-26"];
+  // =========================================================
+  // 📅 [동적 날짜 계산 엔진] 오늘 날짜 기준으로 범위 추출!
+  // =========================================================
+  const getDynamicDateRange = (days) => {
+    const today = new Date();
+    // 시연용 강제 날짜 세팅이 필요하다면 아래 줄 주석 해제 후 사용 (현재 컨텍스트: 2026-06-04)
+    // today.setFullYear(2026, 5, 4); // Month is 0-indexed (5 = June)
+    
+    if (days === null) return null; // "전체 기간"
+    if (days === 0) return today.toISOString().split('T')[0]; // "오늘"
+
+    const targetDate = new Date(today);
+    targetDate.setDate(today.getDate() - days);
+    
+    // YYYY-MM-DD ~ YYYY-MM-DD 포맷
+    return `${targetDate.toISOString().split('T')[0]} ~ ${today.toISOString().split('T')[0]}`;
+  };
+
+  // 모달 안에서 보여줄 옵션 세트
+  const dateOptions = [
+    { label: "오늘", days: 0 },
+    { label: "최근 7일", days: 7 },
+    { label: "최근 1개월", days: 30 },
+    { label: "전체 기간", days: null }
+  ];
 
   // =========================================================
   // 🔒 [금고 아카이브 추적 스캔] 로컬에 세이브된 최근 검색어 꺼내오기
@@ -50,7 +72,6 @@ export default function HistorySearchScreen() {
         setLiveSavedKeywords(JSON.parse(saved));
         console.log("🔒 [검색창 금고 해독] 불러온 최근 저장 키워드 목록:", saved);
       } else {
-        // 장부가 아예 없으면 깨끗하게 빈 채로 파킹!
         setLiveSavedKeywords([]);
       }
     } catch (e) {
@@ -74,14 +95,11 @@ export default function HistorySearchScreen() {
     if (searchText.trim()) {
       try {
         const textToSave = searchText.trim();
-        // 중복 단어 방어벽 필터 필터링 (Set 쉴드)
         const filteredList = liveSavedKeywords.filter(k => k !== textToSave);
-        // 최신 단어를 가방 맨 앞으로 집어넣고 최대 5개 커트라인 컷!
         const updatedList = [textToSave, ...filteredList].slice(0, 5);
         
         setLiveSavedKeywords(updatedList);
         await AsyncStorage.setItem("recentKeywords", JSON.stringify(updatedList));
-        console.log("🔒 [검색어 저축 성공] 기기 서랍장 아카이브 갱신 완료:", updatedList);
       } catch (e) {
         console.error("검색어 금고 저장 대실패:", e);
       }
@@ -89,11 +107,12 @@ export default function HistorySearchScreen() {
 
     console.log("▶️ [8-3번 쿼리 패킹] 결과 창으로 들고 갈 바구니 데이터 👇");
     console.log(`- 검색어: ${finalKeyword}`);
-    console.log(`- 날짜필터: ${selectedDate}`);
+    // 실제 검색 결과창(HistorySearchResultScreen)으로 넘어갈 때는 정확한 날짜 범위 값(selectedDateRange)을 넘깁니다.
+    console.log(`- 날짜필터: ${selectedDateRange}`);
 
     navigation.navigate("HistorySearchResult", {
       searchQuery: finalKeyword,
-      dateFilter: selectedDate,
+      dateFilter: selectedDateRange, // 🚀 라벨이 아니라 실제 계산된 범위 전달
       keywordsFilter: selectedKeywords
     });
   };
@@ -101,19 +120,11 @@ export default function HistorySearchScreen() {
   // 🏷️ 하단 태그 단추 터치 시 핸들러
   const handleTagPress = (tag, title) => {
     if (title === "최근 저장된 키워드") {
-      // 🎯 최근 저장 키워드를 누르면 검색어 입력창에 바로 글자가 뽈칵 복사 주입되는 최첨단 UX 이식!
       setSearchText(tag);
     } else {
-      // 나머지 카테고리는 기존 기획대로 상단 멀티 태그 가방에 차곡차곡 축적!
       if (!selectedKeywords.includes(tag)) {
         setSelectedKeywords([...selectedKeywords, tag]);
       }
-    }
-  };
-
-  const handleAddTag = (tag) => {
-    if (!selectedKeywords.includes(tag)) {
-      setSelectedKeywords([...selectedKeywords, tag]);
     }
   };
 
@@ -121,12 +132,12 @@ export default function HistorySearchScreen() {
     setSelectedKeywords(selectedKeywords.filter(k => k !== target));
   };
 
-  const handleCalendarPress = () => {
-    setCalendarModalVisible(true);
-  };
-
-  const handleSelectDateFromModal = (date) => {
-    setSelectedDate(date);
+  // =========================================================
+  // 📅 모달 내 날짜 선택 처리 핸들러
+  // =========================================================
+  const handleSelectDateOption = (option) => {
+    setSelectedDateLabel(option.label);
+    setSelectedDateRange(getDynamicDateRange(option.days));
     setCalendarModalVisible(false);
   };
 
@@ -161,10 +172,11 @@ export default function HistorySearchScreen() {
 
         {/* 2. 필터 카드 섹션 */}
         <FilterBoxGroup>
-          <FilterItem activeOpacity={0.6} onPress={handleCalendarPress}>
+          <FilterItem activeOpacity={0.6} onPress={() => setCalendarModalVisible(true)}>
             <FilterIcon source={calendarIcon} resizeMode="contain" />
             <FilterText>날짜 범위 |</FilterText>
-            <ValueText>{selectedDate}</ValueText>
+            {/* 🚀 화면에는 "최근 7일" 같은 예쁜 라벨 표출 */}
+            <ValueText>{selectedDateLabel}</ValueText>
           </FilterItem>
           
           <FilterItem style={{ borderBottomWidth: 0, alignItems: 'flex-start' }}>
@@ -186,7 +198,7 @@ export default function HistorySearchScreen() {
           </FilterItem>
         </FilterBoxGroup>
 
-        {/* 3. 카테고리별 태그 리스트 (가변형 가동 킷 완료! 🤙) */}
+        {/* 3. 카테고리별 태그 리스트 */}
         {categories.map((section, sIdx) => (
           <SectionContainer key={sIdx}>
             <SectionTitle>{section.title}</SectionTitle>
@@ -207,26 +219,31 @@ export default function HistorySearchScreen() {
         ))}
       </ScrollView>
 
-      {/* 📅 달력 범위 선택 모달 서랍 */}
+      {/* 📅 [세련된 개선판] 날짜 범위 선택 모달 서랍 */}
       <Modal animationType="fade" transparent={true} visible={calendarModalVisible} onRequestClose={() => setCalendarModalVisible(false)}>
         <ModalOverlay activeOpacity={1} onPress={() => setCalendarModalVisible(false)}>
-          <ModalContent>
+          <DateModalContainer>
             <ModalHeader>
-              <ModalHeaderText>📅 시연용 날짜 범위 선택</ModalHeaderText>
+              <ModalHeaderText>📅 검색 기간 설정</ModalHeaderText>
               <TouchableOpacity onPress={() => setCalendarModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
             </ModalHeader>
-            <ModalInfoText>발표 시나리오에 맞게 범위를 터치하세요!</ModalInfoText>
-            <DateGrid>
-              {dummyDates.map((date, index) => (
-                <DateRowButton key={index} isCurrent={selectedDate === date} onPress={() => handleSelectDateFromModal(date)}>
-                  <Ionicons name="calendar-outline" size={18} color={selectedDate === date ? "#06F393" : "#666"} style={{ marginRight: 10 }} />
-                  <DateButtonText isCurrent={selectedDate === date}>{date}</DateButtonText>
-                </DateRowButton>
+            <ModalBody>
+              {dateOptions.map((option, index) => (
+                <DateOptionButton 
+                  key={index}
+                  activeOpacity={0.7}
+                  onPress={() => handleSelectDateOption(option)}
+                  isCurrent={selectedDateLabel === option.label}
+                >
+                  <DateLabelText isCurrent={selectedDateLabel === option.label}>{option.label}</DateLabelText>
+                  {/* 옵션 버튼 우측에 실제 계산된 날짜 범위 희미하게 표출 */}
+                  <DateValueText>{getDynamicDateRange(option.days) || "전체 조회"}</DateValueText>
+                </DateOptionButton>
               ))}
-            </DateGrid>
-          </ModalContent>
+            </ModalBody>
+          </DateModalContainer>
         </ModalOverlay>
       </Modal>
     </Container>
@@ -258,12 +275,11 @@ const TagRow = styled.View` flex-direction: row; flex-wrap: wrap; `;
 const TagBtn = styled.TouchableOpacity` background-color: #fff; padding: 10px 16px; border-radius: 12px; margin-right: 10px; margin-bottom: 12px; border-width: 1px; border-color: #E2E8F0; `;
 const TagBtnText = styled.Text` font-size: 14px; color: #666; font-weight: 600; `;
 const ModalOverlay = styled.TouchableOpacity` flex: 1; background-color: rgba(0,0,0,0.4); justify-content: center; align-items: center; `;
-const ModalContent = styled.View` width: 85%; background-color: white; border-radius: 24px; padding: 25px; `;
-const ModalHeader = styled.View` flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 10px; `;
-const ModalHeaderText = styled.Text` font-size: 17px; font-weight: 800; color: #111; `;
-const ModalInfoText = styled.Text` font-size: 13px; color: #999; font-weight: 500; margin-bottom: 20px; `;
-const DateGrid = styled.View` width: 100%; `;
-const DateRowButton = styled.TouchableOpacity` width: 100%; flex-direction: row; align-items: center; padding: 14px 18px; border-radius: 12px; margin-bottom: 8px; border-width: 1px; border-color: ${props => props.isCurrent ? "#06F393" : "#F0F0F0"}; background-color: ${props => props.isCurrent ? "#DFFFF4" : "#F8F9FA"}; `;
-const DateButtonText = styled.Text` font-size: 15px; font-weight: ${props => props.isCurrent ? "800" : "600"}; color: ${props => props.isCurrent ? "#02D47F" : "#444"}; `;
-
-const EmptyKeywordsGuidText = styled.Text` font-size: 13px; color: #C4C4C4; font-weight: 600; padding: 5px 0 15px; font-style: italic; `;
+const EmptyKeywordsGuidText = styled.Text` font-size: 13px; color: #C4C4C4; font-weight: 600; padding: 5px 0 15px; font-style: italic; `; 
+const DateModalContainer = styled.View` width: 85%; background-color: #fff; border-radius: 20px; padding: 25px 20px; `;
+const ModalHeader = styled.View` flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 20px; `;
+const ModalHeaderText = styled.Text` font-size: 18px; font-weight: 800; color: #333; `;
+const ModalBody = styled.View` width: 100%; `;
+const DateOptionButton = styled.TouchableOpacity` flex-direction: row; justify-content: space-between; align-items: center; padding: 16px 20px; border-radius: 12px; margin-bottom: 10px; border-width: 1px; border-color: ${props => props.isCurrent ? "#06F393" : "#EEE"}; background-color: ${props => props.isCurrent ? "#DFFFF4" : "#F8F9FA"}; `;
+const DateLabelText = styled.Text` font-size: 16px; font-weight: 700; color: ${props => props.isCurrent ? "#02D47F" : "#333"}; `;
+const DateValueText = styled.Text` font-size: 13px; font-weight: 600; color: #999; `;

@@ -35,25 +35,37 @@ export default function SettingScreen() {
   const [isSoundCall, setIsSoundCall] = useState(false);
   const [isVibrateSubtitle, setIsVibrateSubtitle] = useState(false);
 
+  // 👤 [동적 계정 정보 상태창] 금고에서 꺼낸 유저 정보를 담을 그릇
+  const [userName, setUserName] = useState("로딩 중...");
+  const [userId, setUserId] = useState("로딩 중...");
+
   // 📱 오버레이 모달 제어용 상태창
   const [isLogoutModalVisible, setIsLogoutModalVisible] = useState(false);
   const [isDeleteUserModalVisible, setIsDeleteUserModalVisible] = useState(false);
   const [showErrorBanner, setShowErrorBanner] = useState(false); // 🚨 에러 배너 제어용 실드
 
   // =========================================================
-  // 🔒 [금고 내부 데이터 로드 엔지] 진동/소리 세팅 값 가져오기
+  // 🔒 [금고 내부 데이터 로드 엔진] 진동/소리 세팅 값 및 계정 정보 가져오기
   // =========================================================
-  const loadHardwareSettings = async () => {
+  const loadHardwareAndUserInfo = async () => {
     try {
+      // 1. 하드웨어 설정 로드
       const vCall = await AsyncStorage.getItem("callVibrate");
       const sCall = await AsyncStorage.getItem("callSound");
       const vSub = await AsyncStorage.getItem("subtitleVibrate");
 
-      // 금고 장부가 "true"라고 명시되어 있을 때만 체크를 켜고, 나머지는(null이거나 "false") 처음부터 무조건 꺼짐!
       setIsVibrateCall(vCall === "true");
       setIsSoundCall(sCall === "true");
       setIsVibrateSubtitle(vSub === "true");
-      console.log("📳 [설정방 동기화 완료] 가동 취향 장부 로드 마감 완료!");
+
+      // 2. 유저 계정 정보 로드 (로그인 시 금고에 넣어둔 정보)
+      const savedName = await AsyncStorage.getItem("userName");
+      const savedId = await AsyncStorage.getItem("userId");
+      
+      setUserName(savedName || "카카오 연동 유저"); 
+      setUserId(savedId || `user_${Math.floor(Math.random() * 100000000)}`); // ID가 없으면 임시 발급 
+      
+      console.log("📳 [설정방 동기화 완료] 가동 취향 및 유저 정보 로드 마감 완료!");
     } catch (e) {
       console.error("금고 스캔 실패:", e);
     }
@@ -61,29 +73,30 @@ export default function SettingScreen() {
 
   useEffect(() => {
     if (isFocused) {
-      loadHardwareSettings();
+      loadHardwareAndUserInfo();
     }
   }, [isFocused]);
 
   // =========================================================
-  // 🔥 [명세서 2-1 찐 개편 요격] 푸시 토큰 백엔드 기지국 동기화
+  // 🔥 [폭탄 제거 🚀] 푸시 토큰 1회만 전송하도록 API 스팸 방어막 탑재
   // =========================================================
   useEffect(() => {
     const savePushTokenToServer = async () => {
       try {
-        // 🔑 1-1번 로그인 화면에서 적립해둔 찐유저 JWT 마스터 키 꺼내기!
+        // 🚨 방어막: 이미 토큰을 보낸 적이 있다면 여기서 바로 함수 종료! (API 스팸 차단)
+        const isPushSaved = await AsyncStorage.getItem("isPushTokenSaved");
+        if (isPushSaved === "true") return;
+
+        // 🔑 로그인 화면에서 적립해둔 찐유저 JWT 마스터 키 꺼내기
         const realJwt = await AsyncStorage.getItem("accessToken");
-        
-        // 시연용 임시 껍데기 디바이스 푸시 명찰 규격 유지
         const dummyExpoPushToken = "ExponentPushToken[vx_onsori_2026]"; 
 
         if (!realJwt) {
-          console.log("⚠️ 유저 인증 키 유실 상태 ➔ 토큰 저장 유예");
-          setShowErrorBanner(true); // 토큰이 없으면 명세서 에러 경고등 켜기
+          setShowErrorBanner(true);
           return;
         }
 
-        console.log("▶️ [명세서 2-1 요청] 찐 JWT 토큰 장착 완료! 푸시 토큰 등록 시작... 🚀");
+        console.log("▶️ [명세서 2-1 요청] 푸시 토큰 1회성 등록 시작... 🚀");
         
         const response = await axios.post(
           `${BASE_URL}/api/push-tokens`,
@@ -97,11 +110,14 @@ export default function SettingScreen() {
         );
 
         console.log("▶️ [명세서 2-1 완료] 서버 푸시 토큰 락인 대성공! 🪙 status:", response.status);
-        setShowErrorBanner(false); // 성공했으므로 에러 사이렌 배너 완전 소멸!
+        
+        // 🚀 핵심: 성공했으므로 방어막 스탬프를 찍어 다음 번엔 전송하지 않게 만듦!
+        await AsyncStorage.setItem("isPushTokenSaved", "true");
+        setShowErrorBanner(false); 
 
       } catch (error) {
         console.error("🚨 [명세서 2-1 에러 발생]:", error.message);
-        setShowErrorBanner(true); // 찐빠 나면 빨간 에러창 가드 가동
+        setShowErrorBanner(true); 
       }
     };
 
@@ -133,36 +149,52 @@ export default function SettingScreen() {
     }
   };
 
-  // 🎯 로그아웃 실행 로직 (안전 벨트 청소 가드 이식)
+  // =========================================================
+  // 🎯 로그아웃 실행 로직 (안전 벨트 청소 가드 이식 완착 🚀)
+  // =========================================================
   const handleLogoutConfirm = async () => {
     setIsLogoutModalVisible(false);
     console.log("🧹 [로그아웃 세션 소멸] 유저 토큰 및 취향 초기화 가동");
+    
+    // 유저 데이터 및 방어막 전면 초기화
     await AsyncStorage.removeItem("accessToken");
-    // 로그아웃 시 다음 사람을 위해 취향 장부도 다시 꺼짐으로 초기화 마감
+    await AsyncStorage.removeItem("isVerifiedUser"); 
+    await AsyncStorage.removeItem("userName"); 
+    await AsyncStorage.removeItem("userId"); 
+    await AsyncStorage.removeItem("isPushTokenSaved"); 
+
     await AsyncStorage.setItem("callVibrate", "false");
     await AsyncStorage.setItem("callSound", "false");
     await AsyncStorage.setItem("subtitleVibrate", "false");
     
-    navigation.replace("ResidentLogin"); 
+    // 🚀 스택 초기화로 뒤로 가기 눌러도 홈으로 못 돌아가게 완벽 차단!
+    navigation.reset({
+      index: 0,
+      routes: [{ name: "ResidentLogin" }],
+    });
   };
 
+  // =========================================================
   // 🎯 회원탈퇴 실행 로직
+  // =========================================================
   const handleDeleteUserConfirm = async () => {
     setIsDeleteUserModalVisible(false);
-    await AsyncStorage.clear(); // 전체 장부 영구 파쇄
-    navigation.replace("ResidentLogin");
+    await AsyncStorage.clear(); // 전체 장부 영구 파쇄 (방어막 포함 전부 소멸)
+    
+    navigation.reset({
+      index: 0,
+      routes: [{ name: "ResidentLogin" }],
+    });
   };
 
   return (
     <Container>
-      {/* 1. 헤더 구역 */}
       <Header>
         <Logo source={bellIcon} resizeMode="contain" />
         <HeaderTitle>설정</HeaderTitle>
       </Header>
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        {/* 1. 알림 동적 스위칭 설정 섹션 (토글 엔진 연동 완착! 🤙) */}
         <SectionContainer>
           <SectionLabel>알림</SectionLabel>
           
@@ -191,31 +223,24 @@ export default function SettingScreen() {
           </SettingItem>
         </SectionContainer>
 
-        {/* 2. 일반 설정 라우팅 섹션 */}
         <SectionContainer>
           <SectionLabel>설정</SectionLabel>
-          <SettingLinkItem 
-            activeOpacity={0.6} 
-            onPress={() => navigation.navigate("DeviceSetting")}
-          >
+          <SettingLinkItem activeOpacity={0.6} onPress={() => navigation.navigate("DeviceSetting")}>
             <ItemText>기기 설정</ItemText>
             <ArrowIcon source={arrowRight} />
           </SettingLinkItem>
           
-          <SettingLinkItem 
-            activeOpacity={0.6} 
-            onPress={() => navigation.navigate("TermsPolicy")}
-          >
+          <SettingLinkItem activeOpacity={0.6} onPress={() => navigation.navigate("TermsPolicy")}>
             <ItemText>약관 및 정책</ItemText>
             <ArrowIcon source={arrowRight} />
           </SettingLinkItem>
         </SectionContainer>
 
-        {/* 3. 계정 관리 정보 바인딩 섹션 */}
+        {/* 👤 [동적 계정 정보 바인딩 완료 🚀] 하드코딩 탈출! */}
         <SectionContainer>
           <SectionLabel>계정 관리</SectionLabel>
-          <InfoRow><InfoLabel>회원 아이디</InfoLabel><InfoValue>user121398701928</InfoValue></InfoRow>
-          <InfoRow><InfoLabel>연결된 계정</InfoLabel><InfoValue>(카카오) seousususususu</InfoValue></InfoRow>
+          <InfoRow><InfoLabel>회원 아이디</InfoLabel><InfoValue>{userId}</InfoValue></InfoRow>
+          <InfoRow><InfoLabel>연결된 계정</InfoLabel><InfoValue>(카카오) {userName}</InfoValue></InfoRow>
           
           <ActionItem onPress={() => setIsLogoutModalVisible(true)} style={{ borderTopWidth: 1, borderTopColor: '#EEE', marginTop: 10 }}>
             <ActionLeft><ActionIcon source={logoutIcon} /><ActionText>로그아웃</ActionText></ActionLeft>
@@ -226,24 +251,21 @@ export default function SettingScreen() {
           </ActionItem>
         </SectionContainer>
 
-        {/* 4. 푸터 가이드 (한서대 원본 이메일 완벽 수호!) 🤙 */}
         <Footer>
           <InquiryText>기기 문의 222@hanseo.ac.kr    041 - 000 - 0000</InquiryText>
         </Footer>
       </ScrollView>
 
-      {/* 🚨 실전형 안전 가드 에셋 스낵바 알림 장치 (문제가 있을 때만 동적으로 기동!) */}
       {showErrorBanner && (
         <ErrorToastRow>
           <Ionicons name="alert-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-          <ErrorToastText>🚨 [명세서 2-1 에러] 푸시 토큰 유실됨! 재로그인 필요</ErrorToastText>
+          <ErrorToastText>🚨 [명세서 2-1 에러] 푸시 토큰 등록 실패! (백엔드 확인 요망)</ErrorToastText>
           <TouchableOpacity onPress={() => setShowErrorBanner(false)}>
             <Ionicons name="close" size={18} color="#fff" style={{ marginLeft: 10 }} />
           </TouchableOpacity>
         </ErrorToastRow>
       )}
 
-      {/* 🚨 1. 로그아웃 투명 터치 오버레이 모달 */}
       <Modal transparent={true} visible={isLogoutModalVisible} animationType="fade" onRequestClose={() => setIsLogoutModalVisible(false)}>
         <OverlayBackground>
           <OverlayImageCard source={logoutOverlayImg} resizeMode="contain">
@@ -255,7 +277,6 @@ export default function SettingScreen() {
         </OverlayBackground>
       </Modal>
 
-      {/* 🚨 2. 회원탈퇴 투명 터치 오버레이 모달 */}
       <Modal transparent={true} visible={isDeleteUserModalVisible} animationType="fade" onRequestClose={() => setIsDeleteUserModalVisible(false)}>
         <OverlayBackground>
           <OverlayImageCard source={deleteUserOverlayImg} resizeMode="contain">
@@ -271,7 +292,6 @@ export default function SettingScreen() {
   );
 }
 
-/* ================= 스타일 정의 (수철님 명품 시안 피팅 완벽 보존 🤙) ================= */
 const Container = styled(SafeAreaView)` flex: 1; background-color: #fff; `;
 const Header = styled.View` flex-direction: row; align-items: center; padding: 15px 20px; border-bottom-width: 1px; border-bottom-color: #EEE; `;
 const Logo = styled.Image` width: 32px; height: 32px; margin-right: 10px; `;
@@ -290,7 +310,7 @@ const InfoLabel = styled.Text` font-size: 14px; color: #999; width: 100px; `;
 const InfoValue = styled.Text` font-size: 14px; color: #555; `;
 const ActionItem = styled.TouchableOpacity` flex-direction: row; align-items: center; padding: 15px 20px; `;
 const ActionLeft = styled.View` flex-direction: row; align-items: center; `;
-const ActionIcon = styled.Image` width: 22px; height: 22px; margin-right: 10px; `;
+const ActionIcon = styled.Image` width: 32px; height: 32px; margin-right: 8px; `;
 const ActionText = styled.Text` font-size: 15px; color: #333; font-weight: 600; `;
 const Footer = styled.View` padding: 30px 20px; align-items: center; `;
 const InquiryText = styled.Text` font-size: 12px; color: #BBB; `;
