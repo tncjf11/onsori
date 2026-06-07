@@ -1,24 +1,24 @@
 import React from "react";
 import styled from "styled-components/native";
 
-/**
- * @param {Object} data - { total, online, offline, error } 객체
- */
-const AdminSummaryBox = ({ data }) => {
+const AdminSummaryBox = ({ data = {} }) => {
   return (
     <SummaryContainer>
       <Item>
         <Label>전체 장치</Label>
         <Value>{data.total || 0}</Value>
       </Item>
+
       <Item>
         <Label>온라인</Label>
         <Value style={{ color: "#06F393" }}>{data.online || 0}</Value>
       </Item>
+
       <Item>
         <Label>오프라인</Label>
         <Value>{data.offline || 0}</Value>
       </Item>
+
       <Item>
         <Label>오류</Label>
         <Value style={{ color: "#FF5C5C" }}>{data.error || 0}</Value>

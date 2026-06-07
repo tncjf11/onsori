@@ -1,25 +1,29 @@
 import React from "react";
 import styled from "styled-components/native";
 
-// ✅ 이미지 경로 (src/assets 폴더 기준)
 const onIcon = require("../assets/on_icon.png");
 const offIcon = require("../assets/off_icon.png");
 const wifiOn = require("../assets/wifi_on.png");
 const wifiOff = require("../assets/wifi_off.png");
 
-const StatusCard = ({ type, isOn, mainText, subText }) => {
-  // 어떤 이미지를 보여줄지 결정하는 로직
+const StatusCard = ({
+  type = "device",
+  isOn = false,
+  mainText = "",
+  subText = "",
+}) => {
   const getIcon = () => {
     if (type === "device") {
       return isOn ? onIcon : offIcon;
-    } else {
-      return isOn ? wifiOn : wifiOff;
     }
+
+    return isOn ? wifiOn : wifiOff;
   };
 
   return (
     <CardContainer>
       <StatusIcon source={getIcon()} resizeMode="contain" />
+
       <TextGroup>
         <MainText>{mainText}</MainText>
         <SubText>{subText}</SubText>

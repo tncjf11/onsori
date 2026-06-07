@@ -1,103 +1,327 @@
 import React, { useState, useEffect } from "react";
-import { ScrollView, TouchableOpacity, View, ActivityIndicator, Alert } from "react-native";
+import {
+  ScrollView,
+  TouchableOpacity,
+  View,
+  ActivityIndicator,
+  Alert,
+} from "react-native";
 import styled from "styled-components/native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import BASE_URL from "../../api/config";
 
-// ✅ 이미지 에셋
 const backIcon = require("../../assets/back_icon.png");
-const iconKeyword = require("../../assets/recent_message.png"); 
-const iconCalendar = require("../../assets/icon_calendar.png"); 
-const iconUser = require("../../assets/icon_user.png"); 
-const iconDeviceId = require("../../assets/icon_device_id.png"); 
+const iconKeyword = require("../../assets/recent_message.png");
+const iconCalendar = require("../../assets/icon_calendar.png");
+const iconUser = require("../../assets/icon_user.png");
+const iconDeviceId = require("../../assets/icon_device_id.png");
 
 export default function AdminHistorySearchResultScreen() {
   const navigation = useNavigation();
   const route = useRoute();
 
-  // 🤙 이전 검색 페이지에서 넘어온 파라미터 
-  const { searchParams } = route.params || {
-    searchParams: {
-      keyword: "전체",
-      dateRange: "전체 기간",
-      userId: "전체 사용자",
-      deviceId: "전체 디바이스",
-      apiPayload: {} // 실제 통신용 페이로드
-    }
+  const defaultSearchParams = {
+    keyword: "전체",
+    dateRange: "전체 기간",
+    userId: "전체 사용자",
+    deviceId: "전체 디바이스",
+    visitTypes: [],
+    situations: [],
+    keywords: [],
+    apiPayload: {},
   };
 
-  // 📱 서버에서 받아올 찐 데이터 상태창
+  const searchParams = route.params?.searchParams || defaultSearchParams;
+
   const [searchResults, setSearchResults] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  // =========================================================
-  // 🔥 [명세서 12-3] 관리자 인터폰 로그 검색 API 연동
-  // =========================================================
-  const fetchSearchResults = async () => {
-    try {
-      setIsLoading(true);
-      const token = await AsyncStorage.getItem("adminToken");
-      
-      const payload = searchParams.apiPayload || {};
-
-      // 🎯 GET /api/admin/intercom-logs/search
-      const response = await axios.get(`${BASE_URL}/api/admin/intercom-logs/search`, {
-        params: payload,
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      if (response.data.success && response.data.data) {
-        setSearchResults(response.data.data);
-      } else {
-        setSearchResults([]);
-      }
-    } catch (error) {
-      console.error("🚨 검색 결과 조회 실패:", error.message);
-      // 통신 실패 시 터지지 않게 빈 배열 세팅
-      setSearchResults([]); 
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   useEffect(() => {
     fetchSearchResults();
   }, []);
 
-  // 🕒 시간 포맷터 유틸 (예: 2026/05/03 19:20)
-  const formatDateTime = (isoString) => {
-    if (!isoString) return "";
+  const fetchSearchResults = async () => {
     try {
-      const date = new Date(isoString);
-      const isUtc = !isoString.includes("+09") && (isoString.endsWith("Z") || isoString.includes("T"));
-      const kstDate = isUtc ? new Date(date.getTime() + 9 * 60 * 60 * 1000) : date;
-      const yyyy = kstDate.getFullYear();
-      const mm = String(kstDate.getMonth() + 1).padStart(2, '0');
-      const dd = String(kstDate.getDate()).padStart(2, '0');
-      const hh = String(kstDate.getHours()).padStart(2, '0');
-      const min = String(kstDate.getMinutes()).padStart(2, '0');
-      return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
-    } catch { return ""; }
+      setIsLoading(true);
+
+      const token = await AsyncStorage.getItem("adminToken");
+
+      if (!token) {
+        navigation.navigate("AdminLogin");
+        return;
+      }
+
+      const payload = searchParams.apiPayload || {};
+
+      let response;
+
+      try {
+        response = await axios.get(`${BASE_URL}/api/admin/intercom-logs/search`, {
+          params: payload,
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+      } catch (error) {
+        response = await axios.get(`${BASE_URL}/api/admin/intercom-logs`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+      }
+
+      const rawData = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data)
+          ? response.data
+          : [];
+
+      const filteredData = applyFrontendFilters(rawData, searchParams);
+
+      setSearchResults(filteredData);
+    } catch (error) {
+      console.error("검색 결과 조회 실패:", error?.message);
+      Alert.alert("오류", "검색 결과를 불러오지 못했습니다.");
+      setSearchResults([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const applyFrontendFilters = (list, params) => {
+    const payload = params.apiPayload || {};
+
+    return list.filter((item) => {
+      const targetText = getSearchTargetText(item);
+
+      if (
+        payload.keyword &&
+        !targetText.includes(String(payload.keyword).toLowerCase())
+      ) {
+        return false;
+      }
+
+      if (
+        payload.userId &&
+        !String(item.userId || item.providerUserId || item.residentId || "")
+          .toLowerCase()
+          .includes(String(payload.userId).toLowerCase())
+      ) {
+        return false;
+      }
+
+      if (
+        payload.deviceUid &&
+        !String(item.deviceUid || item.deviceId || "")
+          .toLowerCase()
+          .includes(String(payload.deviceUid).toLowerCase())
+      ) {
+        return false;
+      }
+
+      if (payload.date && !isSameDate(item.createdAt, payload.date)) {
+        return false;
+      }
+
+      const selectedVisitTypes = Array.isArray(params.visitTypes)
+        ? params.visitTypes
+        : [];
+
+      if (selectedVisitTypes.length > 0) {
+        const hasVisitType = selectedVisitTypes.some((tag) =>
+          targetText.includes(String(tag).toLowerCase())
+        );
+
+        if (!hasVisitType) return false;
+      }
+
+      const selectedSituations = Array.isArray(params.situations)
+        ? params.situations
+        : [];
+
+      if (selectedSituations.length > 0) {
+        const hasSituation = selectedSituations.some((tag) =>
+          targetText.includes(String(tag).toLowerCase())
+        );
+
+        if (!hasSituation) return false;
+      }
+
+      const selectedKeywords = Array.isArray(params.keywords)
+        ? params.keywords
+        : [];
+
+      if (selectedKeywords.length > 0) {
+        const hasKeyword = selectedKeywords.some((tag) =>
+          targetText.includes(String(tag).toLowerCase())
+        );
+
+        if (!hasKeyword) return false;
+      }
+
+      return true;
+    });
+  };
+
+  const getSearchTargetText = (item) => {
+    return [
+      item.summary,
+      item.visitorText,
+      item.residentReply,
+      item.refinedText,
+      item.intent,
+      item.deviceUid,
+      item.deviceId,
+      item.userId,
+      item.providerUserId,
+      item.residentId,
+      item.status,
+      item.location,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  };
+
+  const isSameDate = (createdAt, selectedDate) => {
+    const formattedCreatedAt = formatDateOnly(createdAt);
+    const normalizedSelectedDate = normalizeDateInput(selectedDate);
+
+    if (!formattedCreatedAt || !normalizedSelectedDate) {
+      return true;
+    }
+
+    return formattedCreatedAt === normalizedSelectedDate;
+  };
+
+  const normalizeDateInput = (value) => {
+    if (!value) return "";
+
+    const matched = String(value).match(/\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
+
+    if (!matched) return "";
+
+    const [year, month, day] = matched[0].split(/[-/.]/).map(Number);
+
+    if (!year || !month || !day) return "";
+
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(
+      2,
+      "0"
+    )}`;
+  };
+
+  const parseServerDate = (isoString) => {
+    if (!isoString) return null;
+
+    try {
+      const hasExplicitTimezone =
+        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+
+      if (hasExplicitTimezone) {
+        const date = new Date(isoString);
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+
+      const normalized = isoString.replace("T", " ");
+      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hour = 0, minute = 0, second = 0] = timePart
+        .split(":")
+        .map((item) => Number(String(item).split(".")[0]));
+
+      if (!year || !month || !day) return null;
+
+      return new Date(year, month - 1, day, hour, minute, second);
+    } catch {
+      return null;
+    }
+  };
+
+  const formatDateOnly = (isoString) => {
+    const date = parseServerDate(isoString);
+
+    if (!date || Number.isNaN(date.getTime())) return "";
+
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const formatDateTime = (isoString) => {
+    const date = parseServerDate(isoString);
+
+    if (!date || Number.isNaN(date.getTime())) return "";
+
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    const hh = String(date.getHours()).padStart(2, "0");
+    const min = String(date.getMinutes()).padStart(2, "0");
+
+    return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
+  };
+
+  const getDurationText = (item) => {
+    if (item.duration) return item.duration;
+
+    const seconds =
+      item.durationSeconds ??
+      item.callDurationSeconds ??
+      item.totalSeconds ??
+      null;
+
+    if (seconds == null) return "종료됨";
+
+    const minutes = Math.floor(Number(seconds) / 60);
+    const remainSeconds = Number(seconds) % 60;
+
+    if (minutes <= 0) return `${remainSeconds}s`;
+
+    return `${minutes}m ${remainSeconds}s`;
+  };
+
+  const getItemTitle = (item) => {
+    return (
+      item.summary ||
+      item.intent ||
+      item.visitorText ||
+      item.deviceUid ||
+      "인터폰 호출 알림"
+    );
+  };
+
+  const handlePressItem = (item) => {
+    navigation.navigate("AdminHistoryDetail", {
+      item,
+      logId: item.id || item.logId,
+      sessionId: item.sessionId,
+    });
   };
 
   return (
     <Container>
-      {/* 1. 헤더 영역 */}
       <Header>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <BackIcon source={backIcon} resizeMode="contain" />
         </TouchableOpacity>
+
         <HeaderTitle>기록 검색 결과</HeaderTitle>
+
         <View style={{ width: 24 }} />
       </Header>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
-        
-        {/* 2. 상단 검색 조건 요약 카드 */}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 40 }}
+      >
         <SummaryCard>
           <SummaryRow>
             <SummaryIcon source={iconKeyword} resizeMode="contain" />
@@ -105,21 +329,23 @@ export default function AdminHistorySearchResultScreen() {
               <KeywordBadgeText>{searchParams.keyword}</KeywordBadgeText>
             </KeywordBadge>
           </SummaryRow>
+
           <SummaryRow>
             <SummaryIcon source={iconCalendar} resizeMode="contain" />
             <SummaryText>{searchParams.dateRange}</SummaryText>
           </SummaryRow>
+
           <SummaryRow>
             <SummaryIcon source={iconUser} resizeMode="contain" />
             <SummaryText>{searchParams.userId}</SummaryText>
           </SummaryRow>
+
           <SummaryRow style={{ marginBottom: 0 }}>
             <SummaryIcon source={iconDeviceId} resizeMode="contain" />
             <SummaryText>{searchParams.deviceId}</SummaryText>
           </SummaryRow>
         </SummaryCard>
 
-        {/* 3. 로딩 및 검색 결과 리스트 */}
         {isLoading ? (
           <LoadingWrapper>
             <ActivityIndicator size="large" color="#1EC949" />
@@ -128,28 +354,40 @@ export default function AdminHistorySearchResultScreen() {
           <ResultCardContainer>
             {searchResults.map((item, index) => {
               const isLast = index === searchResults.length - 1;
+
               return (
-                <TouchableOpacity 
-                  key={item.id} 
-                  activeOpacity={0.7} 
-                  onPress={() => navigation.navigate("AdminHistoryDetail", { item: item })}
+                <TouchableOpacity
+                  key={item.id || item.logId || index}
+                  activeOpacity={0.7}
+                  onPress={() => handlePressItem(item)}
                 >
                   <ListItem style={isLast ? { borderBottomWidth: 0 } : {}}>
                     <IconCircle>
-                      <Ionicons name="call" size={18} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
+                      <Ionicons
+                        name="call"
+                        size={18}
+                        color="#fff"
+                        style={{ transform: [{ rotate: "135deg" }] }}
+                      />
                     </IconCircle>
-                    
+
                     <ItemContent>
                       <ItemTopRow>
-                        <ItemTitle>{item.summary || "인터폰 호출 알림"}</ItemTitle>
-                        {/* 백엔드 응답에 duration이 없다면 기본 안내 문구 처리 */}
-                        <DurationText>{item.duration || "종료됨"}</DurationText>
+                        <ItemTitle numberOfLines={1}>
+                          {getItemTitle(item)}
+                        </ItemTitle>
+                        <DurationText>{getDurationText(item)}</DurationText>
                       </ItemTopRow>
-                      
+
                       <ItemBottomRow>
-                        <KeywordBadge style={{ paddingVertical: 3, paddingHorizontal: 8 }}>
-                          <KeywordBadgeText>{item.intent || "호출"}</KeywordBadgeText>
+                        <KeywordBadge
+                          style={{ paddingVertical: 3, paddingHorizontal: 8 }}
+                        >
+                          <KeywordBadgeText>
+                            {item.intent || "호출"}
+                          </KeywordBadgeText>
                         </KeywordBadge>
+
                         <ItemTime>{formatDateTime(item.createdAt)}</ItemTime>
                       </ItemBottomRow>
                     </ItemContent>
@@ -163,17 +401,16 @@ export default function AdminHistorySearchResultScreen() {
             <EmptyText>설정한 조건에 맞는 기록이 없습니다.</EmptyText>
           </EmptyWrapper>
         )}
-
       </ScrollView>
     </Container>
   );
 }
 
-/* ================= 스타일 정의 (시안 100% 동기화 🤙) ================= */
+/* ================= 스타일 정의 ================= */
 
-const Container = styled(SafeAreaView)`
+const Container = styled(SafeAreaContainer)`
   flex: 1;
-  background-color: #F4F5F7; 
+  background-color: #F4F5F7;
 `;
 
 const Header = styled.View`
@@ -253,7 +490,7 @@ const ListItem = styled.View`
   flex-direction: row;
   align-items: center;
   padding: 18px 0;
-  border-bottom-width: 1px; 
+  border-bottom-width: 1px;
   border-bottom-color: #F0F0F0;
 `;
 
@@ -261,7 +498,7 @@ const IconCircle = styled.View`
   width: 44px;
   height: 44px;
   border-radius: 22px;
-  background-color: #1EC949; 
+  background-color: #1EC949;
   justify-content: center;
   align-items: center;
   margin-right: 15px;
@@ -279,9 +516,11 @@ const ItemTopRow = styled.View`
 `;
 
 const ItemTitle = styled.Text`
+  flex: 1;
   font-size: 15px;
   font-weight: 700;
   color: #333;
+  margin-right: 8px;
 `;
 
 const DurationText = styled.Text`

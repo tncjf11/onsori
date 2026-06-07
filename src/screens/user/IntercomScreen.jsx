@@ -224,7 +224,7 @@ export default function IntercomScreen() {
               <RecentCallItem key={item.id || idx} item={item} />
             ))
           ) : (
-            <LoadingBox><BannerSubText style={{ textAlign: "center" }}>기록된 최근 호출 데이터가 없쇼.</BannerSubText></LoadingBox>
+            <LoadingBox><BannerSubText style={{ textAlign: "center" }}>기록된 최근 호출 데이터가 없습니다.</BannerSubText></LoadingBox>
           )}
         </ListWrapper>
       </ScrollView>
@@ -234,7 +234,7 @@ export default function IntercomScreen() {
         <ModalOverlay activeOpacity={1} onPress={() => setModalVisible(false)}>
           <ModalContent>
              <ModalHeader>
-              <ModalHeaderText>온소리 사용 TIP 잉~ 🤙</ModalHeaderText>
+              <ModalHeaderText>온소리 사용 TIP</ModalHeaderText>
               <TouchableOpacity onPress={() => setModalVisible(false)}><Ionicons name="close" size={24} color="#333" /></TouchableOpacity>
             </ModalHeader>
             <GuideText>1. 인터폰 호출 확인 (푸시 알림)</GuideText>

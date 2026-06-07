@@ -4,21 +4,27 @@ import { LineChart } from "react-native-chart-kit";
 
 const screenWidth = Dimensions.get("window").width;
 
-/**
- * @param {Array} data - 백엔드에서 받아온 12개 시간대(00, 02, 04, ... 24) 호출 수 배열
- */
-const DashboardChart = ({ data }) => {
-  
-  // 1. 오늘 기준 시간대 레이블(00~24, 2시간 간격) 설정
+const DashboardChart = ({ data = [] }) => {
+  const normalizeChartData = (value) => {
+    const safeData = Array.isArray(value)
+      ? value.map((item) => Number(item) || 0)
+      : [];
+
+    if (safeData.length >= 7) {
+      return safeData.slice(0, 7);
+    }
+
+    return [...safeData, ...Array(7 - safeData.length).fill(0)];
+  };
+
   const chartData = {
     labels: ["00", "04", "08", "12", "16", "20", "24"],
     datasets: [
       {
-        // 2. 백엔드에서 전달받은 데이터가 없으면 차트 렌더링 시 오류 발생 방지
-        data: data && data.length > 0 ? data : [0, 0, 0, 0, 0, 0, 0], 
-        color: (opacity = 1) => `rgba(6, 243, 147, ${opacity})`, 
-        strokeWidth: 3 
-      }
+        data: normalizeChartData(data),
+        color: (opacity = 1) => `rgba(6, 243, 147, ${opacity})`,
+        strokeWidth: 3,
+      },
     ],
   };
 
@@ -26,17 +32,17 @@ const DashboardChart = ({ data }) => {
     backgroundColor: "#ffffff",
     backgroundGradientFrom: "#ffffff",
     backgroundGradientTo: "#ffffff",
-    decimalPlaces: 0, 
-    color: (opacity = 1) => `rgba(6, 243, 147, ${opacity})`, 
-    labelColor: (opacity = 1) => `rgba(153, 153, 153, ${opacity})`, 
+    decimalPlaces: 0,
+    color: (opacity = 1) => `rgba(6, 243, 147, ${opacity})`,
+    labelColor: (opacity = 1) => `rgba(153, 153, 153, ${opacity})`,
     propsForDots: {
       r: "4",
       strokeWidth: "2",
-      stroke: "#06F393"
+      stroke: "#06F393",
     },
     propsForBackgroundLines: {
-      stroke: "#F0F0F0"
-    }
+      stroke: "#F0F0F0",
+    },
   };
 
   return (
@@ -50,9 +56,9 @@ const DashboardChart = ({ data }) => {
         marginVertical: 10,
         borderRadius: 16,
       }}
-      withInnerLines={true}
+      withInnerLines
       withOuterLines={false}
-      withShadow={true}
+      withShadow
     />
   );
 };

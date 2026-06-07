@@ -2,18 +2,25 @@ import React from "react";
 import styled from "styled-components/native";
 import { Ionicons } from "@expo/vector-icons";
 
-const NotificationItem = ({ icon, title, msg, time, isBlack }) => {
+const NotificationItem = ({
+  icon = "notifications-outline",
+  title = "알림",
+  msg = "",
+  time = "",
+  isBlack = false,
+}) => {
   return (
     <NotiRow>
-      {/* isBlack 값에 따라 배경색을 짙은 회색(#333) 또는 민트색(#06F393)으로 변경 */}
       <IconBg style={{ backgroundColor: isBlack ? "#333333" : "#06F393" }}>
         <Ionicons name={icon} size={20} color="white" />
       </IconBg>
+
       <ContentArea>
         <TopRow>
-          <NotiTitle>{title}</NotiTitle>
+          <NotiTitle numberOfLines={1}>{title}</NotiTitle>
           <NotiTime>{time}</NotiTime>
         </TopRow>
+
         <NotiMsg numberOfLines={1}>{msg}</NotiMsg>
       </ContentArea>
     </NotiRow>
@@ -49,9 +56,11 @@ const TopRow = styled.View`
 `;
 
 const NotiTitle = styled.Text`
+  flex: 1;
   font-size: 15px;
   font-weight: 700;
   color: #222;
+  margin-right: 8px;
 `;
 
 const NotiTime = styled.Text`

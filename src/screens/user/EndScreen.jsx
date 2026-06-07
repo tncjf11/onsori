@@ -6,7 +6,7 @@ import {
   Alert,
 } from "react-native";
 import styled from "styled-components/native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import axios from "axios";
@@ -22,20 +22,22 @@ export default function EndScreen() {
   const route = useRoute();
 
   const incomingItem = route.params?.item || {};
-  const logId = route.params?.logId || incomingItem.id;
+
+  const logId =
+    route.params?.logId ??
+    route.params?.id ??
+    incomingItem.id ??
+    incomingItem.logId ??
+    null;
+
+  const routeSessionId =
+    route.params?.sessionId ?? incomingItem.sessionId ?? null;
 
   const [detailData, setDetailData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const fetchLogDetail = async () => {
-      if (!logId) {
-        console.log("logId가 전달되지 않았습니다.");
-        setDetailData(null);
-        setIsLoading(false);
-        return;
-      }
-
       try {
         setIsLoading(true);
 
@@ -44,44 +46,74 @@ export default function EndScreen() {
         if (!savedToken) {
           console.log("저장된 accessToken이 없습니다.");
           setDetailData(null);
-          setIsLoading(false);
           return;
         }
 
-        const response = await axios.get(
-          `${BASE_URL}/api/intercom-logs/${logId}`,
-          {
-            headers: {
-              Authorization: `Bearer ${savedToken}`,
-            },
+        let logDetail =
+          Object.keys(incomingItem).length > 0 ? incomingItem : null;
+
+        if (logId) {
+          try {
+            const logResponse = await axios.get(
+              `${BASE_URL}/api/intercom-logs/${logId}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${savedToken}`,
+                },
+              }
+            );
+
+            if (logResponse.data?.success && logResponse.data?.data) {
+              logDetail = logResponse.data.data;
+            }
+          } catch (error) {
+            console.error("인터폰 로그 상세 조회 실패:", error?.message);
           }
-        );
-
-        if (response.data?.success && response.data?.data) {
-          const sData = response.data.data;
-          const parsedMessages = parseMessages(sData);
-
-          const refinedSummary =
-            sData.summary && sData.summary.trim() !== "내용 없음"
-              ? sData.summary.trim()
-              : "인터폰 호출 알림";
-
-          setDetailData({
-            time: formatFormattedTime(sData.createdAt),
-            tags: sData.intent
-              ? [sData.intent, refinedSummary]
-              : ["일반", refinedSummary],
-            memo:
-              sData.memo && sData.memo.trim() !== ""
-                ? sData.memo.trim()
-                : "당시 작성된 특이사항 메모가 없습니다.",
-            messages: parsedMessages,
-          });
-        } else {
-          setDetailData(null);
         }
+
+        const sessionId = logDetail?.sessionId ?? routeSessionId;
+
+        let sessionMessages = [];
+
+        if (sessionId) {
+          try {
+            const messageResponse = await axios.get(
+              `${BASE_URL}/api/sessions/${sessionId}/messages`,
+              {
+                headers: {
+                  Authorization: `Bearer ${savedToken}`,
+                },
+              }
+            );
+
+            if (
+              messageResponse.data?.success &&
+              Array.isArray(messageResponse.data?.data)
+            ) {
+              sessionMessages = messageResponse.data.data;
+            }
+          } catch (error) {
+            console.error("세션 메시지 조회 실패:", error?.message);
+          }
+        }
+
+        const parsedMessages =
+          sessionMessages.length > 0
+            ? parseSessionMessages(sessionMessages, logDetail)
+            : parseMessagesFromLog(logDetail);
+
+        const baseTime =
+          logDetail?.createdAt ||
+          sessionMessages[0]?.createdAt ||
+          incomingItem.createdAt;
+
+        setDetailData({
+          time: formatFormattedTime(baseTime),
+          tags: logDetail?.intent ? [logDetail.intent] : ["일반"],
+          messages: parsedMessages,
+        });
       } catch (error) {
-        console.error("인터폰 로그 상세 조회 실패:", error?.message);
+        console.error("EndScreen 데이터 조회 실패:", error?.message);
         setDetailData(null);
       } finally {
         setIsLoading(false);
@@ -89,38 +121,89 @@ export default function EndScreen() {
     };
 
     fetchLogDetail();
-  }, [logId]);
+  }, [logId, routeSessionId]);
 
-  const parseMessages = (sData) => {
+  const parseSessionMessages = (messages, logDetail) => {
+    const parsedMessages = messages.map((msg, idx) => {
+      const senderValue = String(
+        msg.senderType || msg.sender || msg.role || msg.type || ""
+      ).toUpperCase();
+
+      const isSystem = senderValue === "SYSTEM";
+
+      const isVisitor =
+        senderValue === "VISITOR" ||
+        senderValue === "INCOMING" ||
+        senderValue === "RECEIVE";
+
+      const createdAt = msg.createdAt || msg.time || logDetail?.createdAt;
+
+      return {
+        id:
+          msg.messageId ??
+          msg.id ??
+          msg.transcriptId ??
+          msg.chunkOrder ??
+          `session-msg-${idx}`,
+        text:
+          msg.content ||
+          msg.messageText ||
+          msg.text ||
+          msg.message ||
+          "호출 신호 감지",
+        type: isSystem ? "system" : isVisitor ? "receive" : "send",
+        time: formatBubbleTime(createdAt),
+        createdAt,
+      };
+    });
+
+    return appendCallEndedMessage(parsedMessages, logDetail);
+  };
+
+  const parseMessagesFromLog = (sData) => {
+    if (!sData) {
+      return appendCallEndedMessage([], {});
+    }
+
     const parsedMessages = [];
-    const rawTranscripts =
+    const rawMessages =
       sData.chatList || sData.transcripts || sData.messages || [];
 
-    if (Array.isArray(rawTranscripts) && rawTranscripts.length > 0) {
-      rawTranscripts.forEach((msg, idx) => {
+    if (Array.isArray(rawMessages) && rawMessages.length > 0) {
+      rawMessages.forEach((msg, idx) => {
         const senderValue = String(
           msg.senderType || msg.sender || msg.role || msg.type || ""
         ).toUpperCase();
+
+        const isSystem = senderValue === "SYSTEM";
 
         const isVisitor =
           senderValue === "VISITOR" ||
           senderValue === "INCOMING" ||
           senderValue === "RECEIVE";
 
+        const createdAt = msg.createdAt || msg.time || sData.createdAt;
+
         parsedMessages.push({
-          id: msg.id || msg.transcriptId || msg.chunkOrder || `msg-${idx}`,
+          id:
+            msg.messageId ??
+            msg.id ??
+            msg.transcriptId ??
+            msg.chunkOrder ??
+            `log-msg-${idx}`,
           text:
+            msg.content ||
             msg.messageText ||
             msg.text ||
             msg.message ||
-            msg.content ||
             "호출 신호 감지",
-          type: isVisitor ? "receive" : "send",
-          time: formatBubbleTime(msg.createdAt || msg.time || sData.createdAt),
+          type: isSystem ? "system" : isVisitor ? "receive" : "send",
+          time: formatBubbleTime(createdAt),
+          createdAt,
         });
       });
 
-      return parsedMessages;
+      return appendCallEndedMessage(parsedMessages, sData);
     }
 
     if (sData.visitorText && sData.visitorText.trim() !== "") {
@@ -129,6 +212,7 @@ export default function EndScreen() {
         text: sData.visitorText.trim(),
         type: "receive",
         time: formatBubbleTime(sData.createdAt),
+        createdAt: sData.createdAt,
       });
     }
 
@@ -138,10 +222,40 @@ export default function EndScreen() {
         text: sData.residentReply.trim(),
         type: "send",
         time: formatBubbleTime(sData.createdAt),
+        createdAt: sData.createdAt,
       });
     }
 
-    return parsedMessages;
+    return appendCallEndedMessage(parsedMessages, sData);
+  };
+
+  const appendCallEndedMessage = (messages, sData = {}) => {
+    const alreadyHasEndMessage = messages.some(
+      (msg) => msg.type === "system" && msg.text === "통화가 종료되었습니다."
+    );
+
+    if (alreadyHasEndMessage) {
+      return messages;
+    }
+
+    const lastMessage = messages[messages.length - 1];
+
+    const endTime =
+      sData.endedAt ||
+      sData.closedAt ||
+      sData.updatedAt ||
+      lastMessage?.createdAt ||
+      sData.createdAt;
+
+    return [
+      ...messages,
+      {
+        id: "call-ended-system",
+        text: "통화가 종료되었습니다.",
+        type: "system",
+        time: formatBubbleTime(endTime),
+      },
+    ];
   };
 
   const handleDeleteLog = () => {
@@ -201,25 +315,24 @@ export default function EndScreen() {
 
     try {
       const hasExplicitTimezone =
-        isoString.endsWith("Z") ||
-        /[+-]\d{2}:\d{2}$/.test(isoString);
+        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
 
-      // Z나 +00:00처럼 타임존이 명확하면 JS Date가 알아서 변환함.
       if (hasExplicitTimezone) {
-        return new Date(isoString);
+        const date = new Date(isoString);
+        return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      // 백엔드 LocalDateTime 형태: "2026-05-26T12:00:00"
-      // 이건 이미 한국 시간이라고 보고 그대로 파싱.
       const normalized = isoString.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
         .split(":")
-        .map((value) => Number(value.split(".")[0]));
+        .map((value) => Number(String(value).split(".")[0]));
+
+      if (!year || !month || !day) return null;
 
       return new Date(year, month - 1, day, hour, minute, second);
-    } catch (e) {
+    } catch {
       return null;
     }
   };
@@ -275,7 +388,7 @@ export default function EndScreen() {
       {isLoading ? (
         <LoadingWrapper>
           <ActivityIndicator size="large" color="#06F393" />
-          <LoadingText>상세 통화 기록 복원 중...</LoadingText>
+          <LoadingText>상세 통화 기록을 불러오는 중...</LoadingText>
         </LoadingWrapper>
       ) : (
         <ScrollView
@@ -299,8 +412,16 @@ export default function EndScreen() {
 
           <ChatLogArea style={{ flex: !hasMessages ? 1 : undefined }}>
             {hasMessages ? (
-              detailData.messages.map((msg) =>
-                msg.type === "receive" ? (
+              detailData.messages.map((msg) => {
+                if (msg.type === "system") {
+                  return (
+                    <SystemMessageContainer key={msg.id}>
+                      <SystemMessageText>{msg.text}</SystemMessageText>
+                    </SystemMessageContainer>
+                  );
+                }
+
+                return msg.type === "receive" ? (
                   <ReceiveContainer key={msg.id}>
                     <ReceiveBubble>
                       <BubbleText>{msg.text}</BubbleText>
@@ -314,8 +435,8 @@ export default function EndScreen() {
                     </SendBubble>
                     <SendTime>{msg.time || "00:00"}</SendTime>
                   </SendContainer>
-                )
-              )
+                );
+              })
             ) : (
               <EmptyChatLogWrapper>
                 <Ionicons name="document-text-outline" size={36} color="#CCC" />
@@ -326,14 +447,10 @@ export default function EndScreen() {
             )}
           </ChatLogArea>
 
-          <MemoBox>
-            <MemoTitle>당시 메모</MemoTitle>
-            <MemoText>
-              {detailData?.memo || "당시 작성된 특이사항 메모가 없습니다."}
-            </MemoText>
-          </MemoBox>
-
-          <HomeBtn activeOpacity={0.8} onPress={() => navigation.navigate("MainTab")}>
+          <HomeBtn
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate("MainTab")}
+          >
             <HomeBtnText>메인 화면으로 이동</HomeBtnText>
           </HomeBtn>
         </ScrollView>
@@ -344,7 +461,7 @@ export default function EndScreen() {
 
 /* ================= 스타일 정의 ================= */
 
-const Container = styled(SafeAreaView)`
+const Container = styled(SafeAreaContainer)`
   flex: 1;
   background-color: #F5F5F5;
 `;
@@ -491,27 +608,18 @@ const SendTime = styled.Text`
   margin-right: 8px;
 `;
 
-const MemoBox = styled.View`
-  margin: 5px 15px 20px;
-  padding: 20px;
-  background-color: #fff;
-  border-radius: 20px;
-  border-width: 1px;
-  border-color: #EAEAEA;
+const SystemMessageContainer = styled.View`
+  align-self: center;
+  background-color: #E0E0E0;
+  padding: 7px 14px;
+  border-radius: 18px;
+  margin-bottom: 16px;
 `;
 
-const MemoTitle = styled.Text`
-  font-size: 13px;
-  color: #BBB;
-  margin-bottom: 10px;
-  font-weight: 800;
-`;
-
-const MemoText = styled.Text`
-  font-size: 15px;
-  color: #444;
+const SystemMessageText = styled.Text`
+  font-size: 12px;
+  color: #666;
   font-weight: 600;
-  line-height: 22px;
 `;
 
 const HomeBtn = styled.TouchableOpacity`

@@ -1,65 +1,141 @@
 import React from "react";
-import { TouchableOpacity, View } from "react-native";
 import styled from "styled-components/native";
-import { useNavigation } from "@react-navigation/native";
 
-/**
- * @param {Object} item - 백엔드 찐 모니터링 데이터 (id, sessionId, deviceUid, status, createdAt)
- */
-const MonitoringItem = ({ item }) => {
-  const navigation = useNavigation();
+const MonitoringItem = ({ item = {} }) => {
+  const normalizeStatus = (statusValue) => {
+    return String(statusValue || "").toUpperCase();
+  };
 
-  // =========================================================
-  // 🔥 [재호 찐 모니터링 동기화] 백엔드 대문자 STATUS 상태 분기 요격! 🚀
-  // =========================================================
-  // 백엔드에서 통화 중일 때는 대문자 "OPEN"으로 날아옵니다!
-  const isCallActive = item.status === "OPEN" || item.status === "open";
-  const statusColor = isCallActive ? "#06F393" : "#999";
+  const getStatusType = (statusValue) => {
+    const status = normalizeStatus(statusValue);
 
-  // 화면에 이쁘게 뿌려줄 한글 상태 텍스트 자석 매핑
-  const displaySttStatus = isCallActive ? "자막 송출 중" : "통화 종료";
-  const displayCallStatus = isCallActive ? "연결 중 (Live)" : "대기 상태";
+    if (
+      status === "OPEN" ||
+      status === "CALLING" ||
+      status === "TALKING" ||
+      status === "ONGOING" ||
+      status === "ACTIVE"
+    ) {
+      return "ACTIVE";
+    }
 
-  // 🕒 백엔드 타임스탬프(createdAt)에서 시간 파싱 유틸
-  const formatTime = (isoString) => {
-    if (!isoString) return "00:00";
+    if (
+      status === "CLOSED" ||
+      status === "ENDED" ||
+      status === "COMPLETE" ||
+      status === "COMPLETED" ||
+      status === "FINISHED"
+    ) {
+      return "ENDED";
+    }
+
+    if (
+      status === "FAILED" ||
+      status === "MISSED" ||
+      status === "NO_ANSWER"
+    ) {
+      return "FAILED";
+    }
+
+    return "UNKNOWN";
+  };
+
+  const getStatusColor = (statusValue) => {
+    const status = getStatusType(statusValue);
+
+    if (status === "ACTIVE") return "#06F393";
+    if (status === "ENDED") return "#999";
+    if (status === "FAILED") return "#FF5C5C";
+
+    return "#999";
+  };
+
+  const getCallStatusText = (statusValue) => {
+    const status = getStatusType(statusValue);
+
+    if (status === "ACTIVE") return "연결";
+    if (status === "ENDED") return "종료";
+    if (status === "FAILED") return "미응답";
+
+    return "확인 필요";
+  };
+
+  const getSttStatusText = (statusValue) => {
+    const status = getStatusType(statusValue);
+
+    if (status === "ACTIVE") return "진행 중";
+    if (status === "ENDED") return "완료";
+    if (status === "FAILED") return "중단";
+
+    return "확인 필요";
+  };
+
+  const parseServerDate = (isoString) => {
+    if (!isoString) return null;
+
     try {
-      const date = new Date(isoString);
-      const hh = String(date.getHours()).padStart(2, '0');
-      const min = String(date.getMinutes()).padStart(2, '0');
-      return `${hh}:${min}`;
+      const hasExplicitTimezone =
+        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+
+      if (hasExplicitTimezone) {
+        const date = new Date(isoString);
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+
+      const normalized = isoString.replace("T", " ");
+      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hour = 0, minute = 0, second = 0] = timePart
+        .split(":")
+        .map((value) => Number(String(value).split(".")[0]));
+
+      if (!year || !month || !day) return null;
+
+      return new Date(year, month - 1, day, hour, minute, second);
     } catch {
-      return "00:00";
+      return null;
     }
   };
 
+  const formatTime = (dateValue) => {
+    if (item.time) return item.time;
+    if (!dateValue) return "00:00";
+
+    const date = parseServerDate(dateValue);
+
+    if (!date || Number.isNaN(date.getTime())) return "00:00";
+
+    const hh = String(date.getHours()).padStart(2, "0");
+    const min = String(date.getMinutes()).padStart(2, "0");
+
+    return `${hh}:${min}`;
+  };
+
+  const statusColor = getStatusColor(item.status || item.sessionStatus);
+
+  const title =
+    item.title ||
+    item.deviceUid ||
+    `세션 ID: ${item.sessionId || item.id || "-"}`;
+
   return (
-    <ItemContainer 
-      activeOpacity={0.8}
-      // 상세 관제탑 화면으로 워프할 때 고유 식별 명찰들을 묶어서 전송!
-      onPress={() => navigation.navigate("AdminMonitoringDetail", { 
-        item: item,
-        logId: item.id,
-        sessionId: item.sessionId
-      })}
-    >
-      {/* 1. 상단 정보 (기기 UID 식별자 & 통화 시작 시간) */}
+    <ItemContainer>
       <TopRow>
-        {/* 🎯 [명찰 싱크 완료] 유저 이름 대신 디바이스 식별 고유 UID나 세션 번호 바인딩! */}
-        <UserId>{item.deviceUid || `세션 ID: ${item.sessionId || item.id}`}</UserId>
-        <Duration>{formatTime(item.createdAt)}</Duration>
+        <UserId numberOfLines={1}>{title}</UserId>
+        <Duration>{formatTime(item.startedAt || item.createdAt)}</Duration>
       </TopRow>
 
       <Divider />
 
-      {/* 2. 하단 상태 (STT 배지 & 통화 상태) */}
       <BottomRow>
         <SttBadge bgColor={statusColor}>
-          <SttText>STT: {displaySttStatus}</SttText>
+          <SttText>
+            STT: {getSttStatusText(item.status || item.sessionStatus)}
+          </SttText>
         </SttBadge>
-        
+
         <CallStatus color={statusColor}>
-          {displayCallStatus}
+          {getCallStatusText(item.status || item.sessionStatus)}
         </CallStatus>
       </BottomRow>
     </ItemContainer>
@@ -68,8 +144,7 @@ const MonitoringItem = ({ item }) => {
 
 export default MonitoringItem;
 
-/* ================= 스타일 정의 (수철님 명품 시안 100% 동기화 철통 보존 🤙) ================= */
-const ItemContainer = styled.TouchableOpacity`
+const ItemContainer = styled.View`
   background-color: #fff;
   margin: 0 20px 15px;
   padding: 18px 20px;
@@ -114,7 +189,7 @@ const BottomRow = styled.View`
 `;
 
 const SttBadge = styled.View`
-  background-color: ${props => props.bgColor};
+  background-color: ${(props) => props.bgColor};
   padding: 6px 12px;
   border-radius: 15px;
 `;
@@ -128,5 +203,5 @@ const SttText = styled.Text`
 const CallStatus = styled.Text`
   font-size: 14px;
   font-weight: 700;
-  color: ${props => props.color};
+  color: ${(props) => props.color};
 `;

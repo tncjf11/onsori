@@ -1,54 +1,109 @@
 import React from "react";
 import styled from "styled-components/native";
 
-// ✅ 수철님이 준비하신 상태 아이콘 이미지들 뽈칵! 🤙 (순정 보존)
-const iconStatusOnline = require("../assets/icon_status_online.png");   // 초록 전원
-const iconStatusOffline = require("../assets/icon_status_offline.png"); // 빨강 전원
-const iconStatusError = require("../assets/icon_status_error.png");     // 빨강 경고 삼각형
+const iconStatusOnline = require("../assets/icon_status_online.png");
+const iconStatusOffline = require("../assets/icon_status_offline.png");
+const iconStatusError = require("../assets/icon_status_error.png");
 
-const DeviceListItem = ({ item }) => {
-  
-  // 배터리 잔량에 따른 색상 결정 (순정 보존 🤙)
+const DeviceListItem = ({ item = {} }) => {
+  const getBatteryValue = () => {
+    const value = Number(item.battery ?? item.batteryLevel ?? 0);
+
+    if (Number.isNaN(value)) return 0;
+
+    return value;
+  };
+
   const getBatteryColor = (percent) => {
     if (percent > 70) return "#06F393";
     if (percent > 20) return "#FFB800";
     return "#FF5C5C";
   };
 
-  // =========================================================
-  // 🔥 [재호 찐 컨트롤러 동기화] 대소문자 예외 격파 가드 스위칭! 🚀
-  // =========================================================
-  const getStatusImage = (status) => {
-    // 백엔드에서 대문자("ONLINE", "ERROR")로 오거나 소문자로 오더라도 다 낚아채게 .toUpperCase() 장착!
-    const formattedStatus = status ? status.toUpperCase() : "OFFLINE";
-    
-    switch (formattedStatus) {
-      case "ONLINE": 
-        return iconStatusOnline;
-      case "ERROR": 
-        return iconStatusError;
-      case "OFFLINE":
-      default: 
-        return iconStatusOffline;
+  const getStatusType = (statusValue) => {
+    const status = String(statusValue || "").toUpperCase();
+
+    if (status === "ONLINE" || status === "ACTIVE" || status === "ENABLED") {
+      return "ONLINE";
+    }
+
+    if (status === "ERROR" || status === "FAIL" || status === "FAILED") {
+      return "ERROR";
+    }
+
+    return "OFFLINE";
+  };
+
+  const getStatusImage = (statusValue) => {
+    const status = getStatusType(statusValue);
+
+    if (status === "ONLINE") return iconStatusOnline;
+    if (status === "ERROR") return iconStatusError;
+
+    return iconStatusOffline;
+  };
+
+  const getStatusLabel = (statusValue) => {
+    const status = getStatusType(statusValue);
+
+    if (status === "ONLINE") return "온라인";
+    if (status === "ERROR") return "오류";
+
+    return "오프라인";
+  };
+
+  const formatDate = (dateValue) => {
+    if (!dateValue) return "기록 없음";
+
+    try {
+      const text = String(dateValue);
+
+      if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+        return text;
+      }
+
+      const hasExplicitTimezone =
+        text.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(text);
+
+      if (hasExplicitTimezone) {
+        const date = new Date(text);
+
+        if (Number.isNaN(date.getTime())) return "기록 없음";
+
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, "0");
+        const dd = String(date.getDate()).padStart(2, "0");
+
+        return `${yyyy}-${mm}-${dd}`;
+      }
+
+      return text.replace("T", " ").substring(0, 10);
+    } catch {
+      return "기록 없음";
     }
   };
 
+  const battery = getBatteryValue();
+  const deviceUid = item.deviceUid || "장치 UID 없음";
+  const deviceId = item.id || item.deviceId || "관리 ID 없음";
+  const updatedDate = formatDate(
+    item.lastUpdate || item.lastUpdatedAt || item.updatedAt || item.createdAt
+  );
+
   return (
     <ItemContainer>
-      {/* 1. 상단 행 (아이콘 이미지로 교체 완료! 🤙) */}
       <TopRow>
         <StatusIcon source={getStatusImage(item.status)} resizeMode="contain" />
-        {/* 🎯 [🚨 명찰 핏 싱크 완료] 재호 분의 DTO 장부 규격에 맞춰 id 혹은 deviceUid 유연 바인딩! */}
-        <DeviceId>ID: {item.id || item.deviceId || "0"}</DeviceId>
-        <BatteryText color={getBatteryColor(item.battery || 0)}>{item.battery || 0}%</BatteryText>
+
+        <DeviceId numberOfLines={1}>{deviceUid}</DeviceId>
+
+        <BatteryText color={getBatteryColor(battery)}>{battery}%</BatteryText>
       </TopRow>
 
-      {/* 2. 하단 행 */}
       <BottomRow>
-        {/* 디바이스 고유 UID 번호 명찰 가드 매핑 */}
-        <UserId>{item.deviceUid || "DEVICE-NULL"}</UserId>
-        {/* 스프링 부트에서 내려주는 타임스탬프 파싱 */}
-        <UpdateDate>{item.lastUpdate || item.createdAt?.substring(0, 10) || "연결 이력 없음"}</UpdateDate>
+        <StatusText>{getStatusLabel(item.status)}</StatusText>
+        <MetaText>ID: {deviceId}</MetaText>
+        <UpdateDate>{updatedDate}</UpdateDate>
       </BottomRow>
     </ItemContainer>
   );
@@ -56,7 +111,8 @@ const DeviceListItem = ({ item }) => {
 
 export default DeviceListItem;
 
-/* ================= 스타일 정의 (수철님 시안 100% 동기화 철통 보존 🤙) ================= */
+/* ================= 스타일 정의 ================= */
+
 const ItemContainer = styled.View`
   background-color: #fff;
   margin: 0 20px 12px;
@@ -93,17 +149,24 @@ const DeviceId = styled.Text`
 const BatteryText = styled.Text`
   font-size: 15px;
   font-weight: 700;
-  color: ${props => props.color};
+  color: ${(props) => props.color};
 `;
 
 const BottomRow = styled.View`
   flex-direction: row;
-  justify-content: space-between;
   align-items: center;
 `;
 
-const UserId = styled.Text`
-  font-size: 14px;
+const StatusText = styled.Text`
+  font-size: 13px;
+  color: #666;
+  font-weight: 700;
+  margin-right: 10px;
+`;
+
+const MetaText = styled.Text`
+  flex: 1;
+  font-size: 13px;
   color: #888;
 `;
 

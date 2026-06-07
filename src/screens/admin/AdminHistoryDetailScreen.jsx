@@ -1,13 +1,23 @@
 import React, { useState, useEffect } from "react";
-import { ScrollView, TouchableOpacity, View, ActivityIndicator } from "react-native";
+import {
+  ScrollView,
+  TouchableOpacity,
+  View,
+  ActivityIndicator,
+  Alert,
+} from "react-native";
 import styled from "styled-components/native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation, useRoute, useIsFocused } from "@react-navigation/native";
+import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
+import {
+  useNavigation,
+  useRoute,
+  useIsFocused,
+} from "@react-navigation/native";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import BASE_URL from "../../api/config";
 
-// ✅ 이미지 에셋
 const backIcon = require("../../assets/back_icon.png");
 const iconWrench = require("../../assets/icon_wrench.png");
 
@@ -16,39 +26,185 @@ export default function AdminHistoryDetailScreen() {
   const route = useRoute();
   const isFocused = useIsFocused();
 
-  // 🤙 검색 결과(목록)에서 넘겨받은 사용자 정보 및 로그 ID
-  const { item } = route.params || {};
-  const targetLogId = item?.id || route.params?.logId;
+  const item = route.params?.item || {};
+  const targetLogId =
+    route.params?.logId ?? item.logId ?? item.id ?? null;
+  const routeSessionId =
+    route.params?.sessionId ?? item.sessionId ?? null;
 
-  // 📱 동적 렌더링용 상태창
-  const [transcripts, setTranscripts] = useState([]);
+  const [logInfo, setLogInfo] = useState(item);
+  const [messages, setMessages] = useState([]);
   const [editHistory, setEditHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // =========================================================
-  // 🔥 [실전 연동] 관리자용 상세 로그 동적 수급 엔진
-  // =========================================================
-  const fetchHistoryDetail = async () => {
-    if (!targetLogId) return;
+  const getMessageText = (msg) => {
+    return (
+      msg.content ||
+      msg.text ||
+      msg.messageText ||
+      msg.message ||
+      msg.visitorText ||
+      "자막 내용 없음"
+    );
+  };
 
+  const getOriginalText = (msg) => {
+    return (
+      msg.originalContent ||
+      msg.originalText ||
+      msg.beforeContent ||
+      msg.beforeText ||
+      ""
+    );
+  };
+
+  const getMessageId = (msg, idx) => {
+    return (
+      msg.messageId ??
+      msg.transcriptId ??
+      msg.id ??
+      msg.chunkOrder ??
+      `msg-${idx}`
+    );
+  };
+
+  const isEditedMessage = (msg) => {
+    const originalText = getOriginalText(msg).trim();
+    const currentText = getMessageText(msg).trim();
+
+    return originalText && currentText && originalText !== currentText;
+  };
+
+  const buildFallbackMessages = (logData) => {
+    if (!logData) return [];
+
+    const fallback = [];
+
+    if (logData.visitorText && logData.visitorText.trim() !== "") {
+      fallback.push({
+        id: "visitor-text",
+        content: logData.visitorText.trim(),
+        senderType: "VISITOR",
+        createdAt: logData.createdAt,
+      });
+    }
+
+    if (logData.residentReply && logData.residentReply.trim() !== "") {
+      fallback.push({
+        id: "resident-reply",
+        content: logData.residentReply.trim(),
+        senderType: "USER",
+        createdAt: logData.updatedAt || logData.createdAt,
+      });
+    }
+
+    if (
+      fallback.length === 0 &&
+      logData.summary &&
+      logData.summary.trim() !== "" &&
+      logData.summary.trim() !== "내용 없음"
+    ) {
+      fallback.push({
+        id: "summary-fallback",
+        content: `요약: ${logData.summary.trim()}`,
+        senderType: "SYSTEM",
+        createdAt: logData.createdAt,
+      });
+    }
+
+    return fallback;
+  };
+
+  const fetchSessionMessages = async (sessionId, token) => {
+    if (!sessionId) return [];
+
+    const response = await axios.get(
+      `${BASE_URL}/api/admin/monitoring/${sessionId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    const data = response.data?.data || {};
+
+    return data.messages || data.conversationMessages || data.transcripts || [];
+  };
+
+  const fetchHistoryDetail = async () => {
     try {
       setIsLoading(true);
+
       const token = await AsyncStorage.getItem("adminToken");
-      const response = await axios.get(`${BASE_URL}/api/admin/intercom-logs/${targetLogId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
 
-      if (response.data.success && response.data.data) {
-        const logData = response.data.data;
-        const fetchedTranscripts = logData.transcripts || [];
-        setTranscripts(fetchedTranscripts);
-
-        // 🧮 수정 이력 필터링: 원본 텍스트(originalText)가 존재하고 현재 텍스트와 다른 경우만 추출
-        const historyList = fetchedTranscripts.filter(t => t.originalText && t.originalText !== t.text);
-        setEditHistory(historyList);
+      if (!token) {
+        Alert.alert("오류", "관리자 로그인이 필요합니다.");
+        navigation.navigate("AdminLogin");
+        return;
       }
+
+      let mergedLogInfo = { ...item };
+
+      if (targetLogId) {
+        try {
+          const logResponse = await axios.get(
+            `${BASE_URL}/api/admin/intercom-logs/${targetLogId}`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            }
+          );
+
+          if (logResponse.data?.success && logResponse.data?.data) {
+            mergedLogInfo = {
+              ...mergedLogInfo,
+              ...logResponse.data.data,
+            };
+          }
+        } catch (error) {
+          console.log("호출 기록 상세 조회 실패:", error?.message);
+        }
+      }
+
+      const sessionId = mergedLogInfo.sessionId || routeSessionId;
+
+      setLogInfo(mergedLogInfo);
+
+      let fetchedMessages = [];
+
+      if (sessionId) {
+        try {
+          fetchedMessages = await fetchSessionMessages(sessionId, token);
+        } catch (error) {
+          console.log("세션 대화 조회 실패:", error?.message);
+        }
+      }
+
+      if (!Array.isArray(fetchedMessages) || fetchedMessages.length === 0) {
+        fetchedMessages =
+          mergedLogInfo.messages ||
+          mergedLogInfo.conversationMessages ||
+          mergedLogInfo.transcripts ||
+          buildFallbackMessages(mergedLogInfo);
+      }
+
+      setMessages(Array.isArray(fetchedMessages) ? fetchedMessages : []);
+      setEditHistory(
+        Array.isArray(fetchedMessages)
+          ? fetchedMessages.filter(isEditedMessage)
+          : []
+      );
     } catch (error) {
-      console.error("🚨 통화 기록 상세 로드 실패:", error.message);
+      const serverError =
+        error.response?.data?.message ||
+        JSON.stringify(error.response?.data) ||
+        error.message;
+
+      console.error("통화 기록 상세 조회 실패:", serverError);
+      setMessages([]);
+      setEditHistory([]);
     } finally {
       setIsLoading(false);
     }
@@ -58,43 +214,111 @@ export default function AdminHistoryDetailScreen() {
     if (isFocused) {
       fetchHistoryDetail();
     }
-  }, [isFocused, targetLogId]);
+  }, [isFocused, targetLogId, routeSessionId]);
 
-  // 🕒 시간 포맷터 (예: 21:22)
-  const formatTime = (isoString) => {
-    if (!isoString) return "";
+  const parseServerDate = (isoString) => {
+    if (!isoString) return null;
+
     try {
-      const date = new Date(isoString);
-      const isUtc = !isoString.includes("+09") && (isoString.endsWith("Z") || isoString.includes("T"));
-      const kstDate = isUtc ? new Date(date.getTime() + 9 * 60 * 60 * 1000) : date;
-      return `${String(kstDate.getHours()).padStart(2, '0')}:${String(kstDate.getMinutes()).padStart(2, '0')}`;
-    } catch { return ""; }
+      const hasExplicitTimezone =
+        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+
+      if (hasExplicitTimezone) {
+        const date = new Date(isoString);
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+
+      const normalized = isoString.replace("T", " ");
+      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hour = 0, minute = 0, second = 0] = timePart
+        .split(":")
+        .map((value) => Number(String(value).split(".")[0]));
+
+      if (!year || !month || !day) return null;
+
+      return new Date(year, month - 1, day, hour, minute, second);
+    } catch {
+      return null;
+    }
   };
 
-  // 📅 날짜+시간 포맷터 (예: 2026/05/04 19:20)
+  const formatTime = (isoString) => {
+    const date = parseServerDate(isoString);
+
+    if (!date || Number.isNaN(date.getTime())) return "";
+
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mm = String(date.getMinutes()).padStart(2, "0");
+
+    return `${hh}:${mm}`;
+  };
+
   const formatDateTime = (isoString) => {
-    if (!isoString) return "";
-    try {
-      const date = new Date(isoString);
-      const isUtc = !isoString.includes("+09") && (isoString.endsWith("Z") || isoString.includes("T"));
-      const kstDate = isUtc ? new Date(date.getTime() + 9 * 60 * 60 * 1000) : date;
-      const yyyy = kstDate.getFullYear();
-      const mm = String(kstDate.getMonth() + 1).padStart(2, '0');
-      const dd = String(kstDate.getDate()).padStart(2, '0');
-      const hh = String(kstDate.getHours()).padStart(2, '0');
-      const min = String(kstDate.getMinutes()).padStart(2, '0');
-      return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
-    } catch { return ""; }
+    const date = parseServerDate(isoString);
+
+    if (!date || Number.isNaN(date.getTime())) return "";
+
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    const hh = String(date.getHours()).padStart(2, "0");
+    const min = String(date.getMinutes()).padStart(2, "0");
+
+    return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
+  };
+
+  const isSystemMessage = (msg) => {
+    const sender = String(
+      msg.senderType || msg.sender || msg.role || msg.type || ""
+    ).toUpperCase();
+
+    return sender === "SYSTEM";
+  };
+
+  const isVisitorMessage = (msg) => {
+    const sender = String(
+      msg.senderType || msg.sender || msg.role || msg.type || ""
+    ).toUpperCase();
+
+    if (
+      sender === "RESIDENT" ||
+      sender === "ADMIN" ||
+      sender === "USER" ||
+      sender === "SEND" ||
+      sender === "OUTGOING"
+    ) {
+      return false;
+    }
+
+    return true;
+  };
+
+  const getDisplayTitle = () => {
+    if (logInfo.deviceUid) {
+      return `${logInfo.deviceUid} 통화 기록`;
+    }
+
+    if (logInfo.userName || logInfo.name) {
+      return `${logInfo.userName || logInfo.name} 통화 기록`;
+    }
+
+    if (logInfo.location) {
+      return `${logInfo.location} 통화 기록`;
+    }
+
+    return "통화 기록 상세";
   };
 
   return (
     <Container>
-      {/* 1. 헤더 영역 */}
       <Header>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <BackIcon source={backIcon} resizeMode="contain" />
         </TouchableOpacity>
-        <HeaderTitle>{item?.deviceUid || item?.title || "알수없음"}님의 통화 기록</HeaderTitle>
+
+        <HeaderTitle numberOfLines={1}>{getDisplayTitle()}</HeaderTitle>
+
         <View style={{ width: 24 }} />
       </Header>
 
@@ -103,31 +327,50 @@ export default function AdminHistoryDetailScreen() {
           <ActivityIndicator size="large" color="#1EC949" />
         </LoadingWrapper>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
-          
-          {/* 2. 대화 로그 카드 (동적 바인딩) */}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 40 }}
+        >
           <ChatCard>
-            {transcripts.map((msg, idx) => {
-              const isVisitor = msg.sender === "visitor" || msg.type === "incoming";
-              const msgTime = formatTime(msg.createdAt || msg.timestamp);
+            {messages.length > 0 ? (
+              messages.map((msg, idx) => {
+                const isSystem = isSystemMessage(msg);
+                const isVisitor = isVisitorMessage(msg);
+                const msgTime = formatTime(
+                  msg.createdAt || msg.timestamp || msg.time
+                );
+                const messageText = getMessageText(msg);
 
-              return (
-                <BubbleWrapper key={msg.id || idx} isVisitor={isVisitor}>
-                  {!isVisitor && <BubbleTimeRight>{msgTime}</BubbleTimeRight>}
-                  <BubbleBox isVisitor={isVisitor}>
-                    <BubbleText isVisitor={isVisitor}>{msg.text}</BubbleText>
-                  </BubbleBox>
-                  {isVisitor && <BubbleTimeLeft>{msgTime}</BubbleTimeLeft>}
-                </BubbleWrapper>
-              );
-            })}
-            
-            {transcripts.length === 0 && (
+                if (isSystem) {
+                  return (
+                    <SystemMessageBox key={getMessageId(msg, idx)}>
+                      <SystemMessageText>{messageText}</SystemMessageText>
+                    </SystemMessageBox>
+                  );
+                }
+
+                return (
+                  <BubbleWrapper
+                    key={getMessageId(msg, idx)}
+                    isVisitor={isVisitor}
+                  >
+                    {!isVisitor && <BubbleTimeRight>{msgTime}</BubbleTimeRight>}
+
+                    <BubbleBox isVisitor={isVisitor}>
+                      <BubbleText isVisitor={isVisitor}>
+                        {messageText}
+                      </BubbleText>
+                    </BubbleBox>
+
+                    {isVisitor && <BubbleTimeLeft>{msgTime}</BubbleTimeLeft>}
+                  </BubbleWrapper>
+                );
+              })
+            ) : (
               <EmptyText>대화 기록이 없습니다.</EmptyText>
             )}
           </ChatCard>
 
-          {/* 3. 수정 이력 카드 (동적 바인딩) */}
           <HistoryCard>
             <SectionHeader>
               <WrenchIcon source={iconWrench} resizeMode="contain" />
@@ -137,14 +380,35 @@ export default function AdminHistoryDetailScreen() {
             {editHistory.length > 0 ? (
               editHistory.map((hist, idx) => {
                 const isLast = idx === editHistory.length - 1;
+
                 return (
-                  <HistoryItem key={hist.id || idx} style={isLast ? { borderBottomWidth: 0, paddingBottom: 0, marginBottom: 0 } : {}}>
+                  <HistoryItem
+                    key={getMessageId(hist, idx)}
+                    style={
+                      isLast
+                        ? {
+                            borderBottomWidth: 0,
+                            paddingBottom: 0,
+                            marginBottom: 0,
+                          }
+                        : {}
+                    }
+                  >
                     <HistoryHeader>
                       <HistoryIcon>↪</HistoryIcon>
-                      <HistoryMainText numberOfLines={1}>{hist.text}</HistoryMainText>
-                      <HistoryTime>{formatDateTime(hist.updatedAt || hist.createdAt)}</HistoryTime>
+
+                      <HistoryMainText numberOfLines={1}>
+                        {getMessageText(hist)}
+                      </HistoryMainText>
+
+                      <HistoryTime>
+                        {formatDateTime(hist.updatedAt || hist.createdAt)}
+                      </HistoryTime>
                     </HistoryHeader>
-                    <HistorySubText>{hist.originalText}</HistorySubText>
+
+                    <HistorySubText>
+                      수정 전: {getOriginalText(hist) || "원본 내용 없음"}
+                    </HistorySubText>
                   </HistoryItem>
                 );
               })
@@ -152,18 +416,17 @@ export default function AdminHistoryDetailScreen() {
               <EmptyText>수정된 이력이 없습니다.</EmptyText>
             )}
           </HistoryCard>
-
         </ScrollView>
       )}
     </Container>
   );
 }
 
-/* ================= 스타일 정의 (시안 100% 동기화 🤙) ================= */
+/* ================= 스타일 정의 ================= */
 
-const Container = styled(SafeAreaView)`
+const Container = styled(SafeAreaContainer)`
   flex: 1;
-  background-color: #F4F5F7; /* 시안 바탕색 */
+  background-color: #F4F5F7;
 `;
 
 const Header = styled.View`
@@ -181,14 +444,16 @@ const BackIcon = styled.Image`
 `;
 
 const HeaderTitle = styled.Text`
+  flex: 1;
+  margin-horizontal: 12px;
   font-size: 20px;
   font-weight: 800;
   color: #333;
+  text-align: center;
 `;
 
-/* 💬 채팅 카드 UI (시안의 회색 둥근 배경) */
 const ChatCard = styled.View`
-  background-color: #EFEFEF; 
+  background-color: #EFEFEF;
   margin: 15px 20px;
   padding: 25px 20px;
   border-radius: 20px;
@@ -196,13 +461,13 @@ const ChatCard = styled.View`
 
 const BubbleWrapper = styled.View`
   flex-direction: row;
-  justify-content: ${props => props.isVisitor ? 'flex-start' : 'flex-end'};
+  justify-content: ${(props) => (props.isVisitor ? "flex-start" : "flex-end")};
   align-items: flex-end;
   margin-bottom: 15px;
 `;
 
 const BubbleBox = styled.View`
-  background-color: ${props => props.isVisitor ? '#FFFFFF' : '#1EC949'};
+  background-color: ${(props) => (props.isVisitor ? "#FFFFFF" : "#1EC949")};
   padding: 12px 18px;
   border-radius: 20px;
   max-width: 75%;
@@ -211,7 +476,7 @@ const BubbleBox = styled.View`
 const BubbleText = styled.Text`
   font-size: 15px;
   font-weight: 500;
-  color: ${props => props.isVisitor ? '#333' : '#FFF'};
+  color: ${(props) => (props.isVisitor ? "#333" : "#FFF")};
 `;
 
 const BubbleTimeLeft = styled.Text`
@@ -228,7 +493,20 @@ const BubbleTimeRight = styled.Text`
   margin-bottom: 5px;
 `;
 
-/* 📝 수정 이력 카드 UI (시안의 하얀색 배경) */
+const SystemMessageBox = styled.View`
+  align-self: center;
+  background-color: #DDDDDD;
+  padding: 8px 14px;
+  border-radius: 18px;
+  margin-bottom: 15px;
+`;
+
+const SystemMessageText = styled.Text`
+  font-size: 12px;
+  color: #666;
+  font-weight: 600;
+`;
+
 const HistoryCard = styled.View`
   background-color: #FFFFFF;
   margin: 10px 20px;

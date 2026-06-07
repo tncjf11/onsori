@@ -1,18 +1,21 @@
 import React, { useState, useEffect } from "react";
-import { ScrollView, TouchableOpacity, View, ActivityIndicator, Alert } from "react-native";
+import {
+  ScrollView,
+  TouchableOpacity,
+  View,
+  ActivityIndicator,
+  Alert,
+} from "react-native";
 import styled from "styled-components/native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation, useIsFocused } from "@react-navigation/native";
 import axios from "axios";
-
-// 📥 관리자 마스터 키 수급 및 부품 임포트
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import BASE_URL from "../../api/config";
 
-// ✅ 완착 개조된 컴포넌트들
+import BASE_URL from "../../api/config";
 import DeviceListItem from "../../components/DeviceListItem";
-import AdminSummaryBox from "../../components/AdminSummaryBox"; 
+import AdminSummaryBox from "../../components/AdminSummaryBox";
 
 const bellIcon = require("../../assets/bell.png");
 
@@ -22,42 +25,102 @@ export default function AdminDeviceScreen() {
 
   const [devices, setDevices] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [stats, setStats] = useState({ total: 0, online: 0, offline: 0, error: 0 });
+  const [stats, setStats] = useState({
+    total: 0,
+    online: 0,
+    offline: 0,
+    error: 0,
+  });
+
+  const getStatusType = (statusValue) => {
+    const status = String(statusValue || "").toUpperCase();
+
+    if (status === "ONLINE" || status === "ACTIVE" || status === "ENABLED") {
+      return "ONLINE";
+    }
+
+    if (status === "ERROR" || status === "FAIL" || status === "FAILED") {
+      return "ERROR";
+    }
+
+    return "OFFLINE";
+  };
+
+  const buildStats = (deviceList) => {
+    const total = deviceList.length;
+    const online = deviceList.filter(
+      (device) => getStatusType(device.status) === "ONLINE"
+    ).length;
+    const error = deviceList.filter(
+      (device) => getStatusType(device.status) === "ERROR"
+    ).length;
+    const offline = total - online - error;
+
+    return {
+      total,
+      online,
+      offline,
+      error,
+    };
+  };
+
+  const resetDevices = () => {
+    setDevices([]);
+    setStats({
+      total: 0,
+      online: 0,
+      offline: 0,
+      error: 0,
+    });
+  };
 
   const fetchAllDevices = async () => {
     try {
       setIsLoading(true);
+
       const token = await AsyncStorage.getItem("adminToken");
+
       if (!token) {
+        resetDevices();
         navigation.navigate("AdminLogin");
         return;
       }
 
       const response = await axios.get(`${BASE_URL}/api/admin/devices`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
 
-      if (response.data.success && response.data.data) {
+      if (response.data?.success && Array.isArray(response.data?.data)) {
         const deviceList = response.data.data;
+
         setDevices(deviceList);
-
-        const total = deviceList.length;
-        const online = deviceList.filter(d => d.status?.toUpperCase() === "ONLINE").length;
-        const error = deviceList.filter(d => d.status?.toUpperCase() === "ERROR").length;
-        const offline = total - online - error;
-
-        setStats({ total, online, offline, error });
+        setStats(buildStats(deviceList));
+      } else {
+        resetDevices();
       }
     } catch (error) {
-      Alert.alert("통신 오류", "장치 데이터를 불러오지 못했습니다.");
+      console.error("장치 목록 조회 실패:", error?.message);
+      resetDevices();
+      Alert.alert("오류", "장치 목록을 불러오지 못했습니다.");
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isFocused) fetchAllDevices();
+    if (isFocused) {
+      fetchAllDevices();
+    }
   }, [isFocused]);
+
+  const handlePressDevice = (item) => {
+    navigation.navigate("AdminDeviceDetail", {
+      deviceId: item.id || item.deviceId,
+      item,
+    });
+  };
 
   return (
     <Container>
@@ -69,17 +132,21 @@ export default function AdminDeviceScreen() {
       {isLoading ? (
         <LoadingWrapper>
           <ActivityIndicator size="large" color="#06F393" />
-          <LoadingText>장치 목록 동기화 중...</LoadingText>
+          <LoadingText>장치 목록을 불러오는 중...</LoadingText>
         </LoadingWrapper>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 90 }}>
-          
-          {/* 🎯 [컴포넌트화 완료] AdminSummaryBox 적용 */}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 90 }}
+        >
           <AdminSummaryBox data={stats} />
 
           <ListHeaderArea>
-            <ListTitle>디바이스 목록 ({devices.length})</ListTitle>
-            <TouchableOpacity onPress={() => navigation.navigate("AdminDeviceSearch")}>
+            <ListTitle>장치 목록 ({devices.length})</ListTitle>
+
+            <TouchableOpacity
+              onPress={() => navigation.navigate("AdminDeviceSearch")}
+            >
               <Ionicons name="search" size={24} color="#333" />
             </TouchableOpacity>
           </ListHeaderArea>
@@ -87,10 +154,10 @@ export default function AdminDeviceScreen() {
           <ListArea>
             {devices.length > 0 ? (
               devices.map((item, idx) => (
-                <TouchableOpacity 
-                  key={item.id || item.deviceUid || idx} 
+                <TouchableOpacity
+                  key={item.id || item.deviceId || item.deviceUid || idx}
                   activeOpacity={0.9}
-                  onPress={() => navigation.navigate("AdminDeviceDetail", { deviceId: item.id, item: item })}
+                  onPress={() => handlePressDevice(item)}
                 >
                   <DeviceListItem item={item} />
                 </TouchableOpacity>
@@ -98,7 +165,7 @@ export default function AdminDeviceScreen() {
             ) : (
               <EmptyWrapper>
                 <Ionicons name="hardware-handle-outline" size={40} color="#DDD" />
-                <EmptyText>등록된 기기가 없습니다.</EmptyText>
+                <EmptyText>등록된 장치가 없습니다.</EmptyText>
               </EmptyWrapper>
             )}
           </ListArea>
@@ -108,14 +175,72 @@ export default function AdminDeviceScreen() {
   );
 }
 
-const Container = styled(SafeAreaView)` flex: 1; background-color: #F8F9FA; `;
-const Header = styled.View` flex-direction: row; align-items: center; padding: 15px 20px; background-color: #fff; border-bottom-width: 1px; border-bottom-color: #F0F0F0; `;
-const Logo = styled.Image` width: 32px; height: 32px; margin-right: 10px; `;
-const HeaderTitle = styled.Text` font-size: 20px; font-weight: 800; color: #333; `;
-const ListHeaderArea = styled.View` flex-direction: row; justify-content: space-between; align-items: center; padding: 10px 25px 15px; `;
-const ListTitle = styled.Text` font-size: 18px; font-weight: 800; color: #333; `;
-const ListArea = styled.View` width: 100%; `;
-const LoadingWrapper = styled.View` flex: 1; justify-content: center; align-items: center; padding-top: 100px; `;
-const LoadingText = styled.Text` font-size: 13px; color: #718096; font-weight: 600; margin-top: 12px; `;
-const EmptyWrapper = styled.View` padding: 60px 20px; justify-content: center; align-items: center; `;
-const EmptyText = styled.Text` font-size: 14px; color: #BBB; font-weight: 600; margin-top: 10px; `;
+const Container = styled(SafeAreaContainer)`
+  flex: 1;
+  background-color: #F8F9FA;
+`;
+
+const Header = styled.View`
+  flex-direction: row;
+  align-items: center;
+  padding: 15px 20px;
+  background-color: #fff;
+  border-bottom-width: 1px;
+  border-bottom-color: #F0F0F0;
+`;
+
+const Logo = styled.Image`
+  width: 32px;
+  height: 32px;
+  margin-right: 10px;
+`;
+
+const HeaderTitle = styled.Text`
+  font-size: 20px;
+  font-weight: 800;
+  color: #333;
+`;
+
+const ListHeaderArea = styled.View`
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 25px 15px;
+`;
+
+const ListTitle = styled.Text`
+  font-size: 18px;
+  font-weight: 800;
+  color: #333;
+`;
+
+const ListArea = styled.View`
+  width: 100%;
+`;
+
+const LoadingWrapper = styled.View`
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+  padding-top: 100px;
+`;
+
+const LoadingText = styled.Text`
+  font-size: 13px;
+  color: #718096;
+  font-weight: 600;
+  margin-top: 12px;
+`;
+
+const EmptyWrapper = styled.View`
+  padding: 60px 20px;
+  justify-content: center;
+  align-items: center;
+`;
+
+const EmptyText = styled.Text`
+  font-size: 14px;
+  color: #BBB;
+  font-weight: 600;
+  margin-top: 10px;
+`;

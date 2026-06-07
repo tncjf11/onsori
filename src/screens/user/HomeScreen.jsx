@@ -1,255 +1,668 @@
-import React, { useState, useEffect } from "react";
-import { ScrollView, TouchableOpacity, View, Modal, ActivityIndicator, Vibration } from "react-native";
+import React, { useState, useEffect, useRef } from "react";
+import {
+  ScrollView,
+  TouchableOpacity,
+  Modal,
+  ActivityIndicator,
+  Vibration,
+  Alert,
+} from "react-native";
 import styled from "styled-components/native";
 import { Ionicons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
 import { useNavigation, useIsFocused } from "@react-navigation/native";
 import axios from "axios";
-
-// 📥 기기 저장소 비밀금고 부품 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-// 🌐 config.js의 배포 주소 (https://voicenotice-backend.onrender.com)
 import BASE_URL from "../../api/config";
-
-// ✅ 공용 리스트 부품 임포트!
 import RecentCallItem from "../../components/RecentCallItem";
 
-// ✅ 이미지 에셋
 const bellIcon = require("../../assets/bell.png");
+
+const logHome = (message, data) => {
+  if (data !== undefined) {
+    console.log(`[HOME] ${message}`, data);
+  } else {
+    console.log(`[HOME] ${message}`);
+  }
+};
 
 export default function HomeScreen() {
   const navigation = useNavigation();
-  const isFocused = useIsFocused(); // 📱 탭 전환 및 화면 복귀 감지 센서
+  const isFocused = useIsFocused();
 
   const [modalVisible, setModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState(null);
-
-  // 😴 아무런 호출이 없을 때는 기본값이 'idle' (호출 대기 중)
-  const [intercomStatus, setIntercomStatus] = useState('idle');
-
-  // 🤙 최근 호출 이력 클린 배열 상태창
+  const [intercomStatus, setIntercomStatus] = useState("idle");
   const [recentCalls, setRecentCalls] = useState([]);
-
-  // 📥 최근 호출 이력 부품에 바톤 터치해 줄 진짜 토큰 상태창
   const [token, setToken] = useState(null);
 
-  // =========================================================
-  // 📳 [🚨 프론트 자체 하드웨어 엔진] 진동 루프 가동 및 파쇄 제어부
-  // =========================================================
+  const intercomStatusRef = useRef("idle");
+  const activeSessionIdRef = useRef(null);
+  const lastHomeStatusLogRef = useRef("");
+
+  const syncNavigationParams = (nextStatus, nextSessionId) => {
+    const safeSessionId = nextSessionId || null;
+
+    navigation.setParams?.({
+      intercomStatus: nextStatus,
+      activeSessionId: safeSessionId,
+    });
+
+    const parentNavigation = navigation.getParent?.();
+
+    parentNavigation?.setParams?.({
+      intercomStatus: nextStatus,
+      activeSessionId: safeSessionId,
+    });
+  };
+
+  const updateIntercomStatus = (
+    nextStatus,
+    reason = "",
+    nextSessionId = activeSessionIdRef.current
+  ) => {
+    const safeSessionId = nextSessionId || null;
+    const prevStatus = intercomStatusRef.current;
+
+    intercomStatusRef.current = nextStatus;
+    activeSessionIdRef.current = safeSessionId;
+
+    setIntercomStatus(nextStatus);
+    setActiveSessionId(safeSessionId);
+
+    syncNavigationParams(nextStatus, safeSessionId);
+
+    const logKey = `${prevStatus}->${nextStatus}:${safeSessionId}:${reason}`;
+
+    if (lastHomeStatusLogRef.current !== logKey) {
+      lastHomeStatusLogRef.current = logKey;
+
+      logHome("인터폰 상태 동기화", {
+        previous: prevStatus,
+        next: nextStatus,
+        activeSessionId: safeSessionId,
+        reason,
+      });
+    }
+  };
+
+  const parseServerDate = (isoString) => {
+    if (!isoString) return null;
+
+    try {
+      const hasExplicitTimezone =
+        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+
+      if (hasExplicitTimezone) {
+        const date = new Date(isoString);
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+
+      const normalized = isoString.replace("T", " ");
+      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hour = 0, minute = 0, second = 0] = timePart
+        .split(":")
+        .map((value) => Number(String(value).split(".")[0]));
+
+      if (!year || !month || !day) return null;
+
+      return new Date(year, month - 1, day, hour, minute, second);
+    } catch {
+      return null;
+    }
+  };
+
+  const getLogDateValue = (log = {}) => {
+    return (
+      log.createdAt ||
+      log.startedAt ||
+      log.endedAt ||
+      log.endTime ||
+      log.timestamp ||
+      log.time ||
+      ""
+    );
+  };
+
+  const getSortTime = (log = {}) => {
+    const date = parseServerDate(getLogDateValue(log));
+
+    if (!date || Number.isNaN(date.getTime())) {
+      return 0;
+    }
+
+    return date.getTime();
+  };
+
+  const formatTimeGap = (isoString) => {
+    if (!isoString) return "기록 없음";
+
+    try {
+      const now = new Date();
+      const logTime = parseServerDate(isoString);
+
+      if (!logTime || Number.isNaN(logTime.getTime())) {
+        return "시간 오차";
+      }
+
+      const diffMs = now.getTime() - logTime.getTime();
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+
+      if (diffMins < 1) return "방금 전";
+      if (diffMins < 60) return `${diffMins}분 전`;
+
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${diffHours}시간 전`;
+
+      const diffDays = Math.floor(diffHours / 24);
+      if (diffDays === 1) return "어제";
+      if (diffDays <= 7) return `${diffDays}일 전`;
+
+      const year = logTime.getFullYear();
+      const month = String(logTime.getMonth() + 1).padStart(2, "0");
+      const day = String(logTime.getDate()).padStart(2, "0");
+
+      return `${year}-${month}-${day}`;
+    } catch (error) {
+      logHome("시간 표시 처리 실패", error?.message);
+      return "시간 오차";
+    }
+  };
+
+  const normalizeStatus = (value) => {
+    return String(value || "").toUpperCase();
+  };
+
+  const getSessionStatus = (session) => {
+    const safeSession = session || {};
+
+    return normalizeStatus(
+      safeSession.status ||
+        safeSession.sessionStatus ||
+        safeSession.callStatus ||
+        safeSession.state ||
+        ""
+    );
+  };
+
+  const getSessionId = (session) => {
+    const safeSession = session || {};
+
+    return (
+      safeSession.sessionId ??
+      safeSession.id ??
+      safeSession.callSessionId ??
+      null
+    );
+  };
+
+  const hasEndedTime = (session) => {
+    const safeSession = session || {};
+
+    return Boolean(
+      safeSession.endedAt || safeSession.endTime || safeSession.closedAt
+    );
+  };
+
+  const isEndedSession = (session) => {
+    if (!session) return false;
+
+    const status = getSessionStatus(session);
+
+    return (
+      hasEndedTime(session) ||
+      status === "CLOSED" ||
+      status === "ENDED" ||
+      status === "COMPLETE" ||
+      status === "COMPLETED" ||
+      status === "FINISHED" ||
+      status === "SUCCESS" ||
+      status === "FAILED" ||
+      status === "MISSED" ||
+      status === "NO_ANSWER" ||
+      status === "CANCELED" ||
+      status === "CANCELLED"
+    );
+  };
+
+  const isActiveSession = (session) => {
+    if (!session) return false;
+    if (isEndedSession(session)) return false;
+
+    const status = getSessionStatus(session);
+
+    return (
+      status === "OPEN" ||
+      status === "CALLING" ||
+      status === "TALKING" ||
+      status === "ONGOING" ||
+      status === "INCOMING" ||
+      status === "ACTIVE"
+    );
+  };
+
+  const extractIntercomLogs = (responseData) => {
+    if (Array.isArray(responseData?.data)) {
+      return responseData.data;
+    }
+
+    if (Array.isArray(responseData)) {
+      return responseData;
+    }
+
+    if (Array.isArray(responseData?.content)) {
+      return responseData.content;
+    }
+
+    if (Array.isArray(responseData?.logs)) {
+      return responseData.logs;
+    }
+
+    if (Array.isArray(responseData?.data?.content)) {
+      return responseData.data.content;
+    }
+
+    if (Array.isArray(responseData?.data?.logs)) {
+      return responseData.data.logs;
+    }
+
+    if (Array.isArray(responseData?.result)) {
+      return responseData.result;
+    }
+
+    if (Array.isArray(responseData?.data?.result)) {
+      return responseData.data.result;
+    }
+
+    return [];
+  };
+
+  const getLogTitle = (log = {}) => {
+    const summary = String(log.summary || "").trim();
+    const visitorText = String(log.visitorText || "").trim();
+    const content = String(log.content || "").trim();
+    const message = String(log.message || "").trim();
+
+    if (summary && summary !== "내용 없음") return summary;
+    if (visitorText) return visitorText;
+    if (content) return content;
+    if (message) return message;
+
+    return "인터폰 호출 알림";
+  };
+
+  const mapRecentLogItem = (log = {}, index = 0) => {
+    const logId = log.logId ?? log.id ?? log.intercomLogId ?? index;
+    const sessionId = log.sessionId ?? log.callSessionId ?? null;
+    const createdAt = getLogDateValue(log);
+
+    return {
+      ...log,
+      id: logId,
+      logId,
+      sessionId,
+      title: getLogTitle(log),
+      time: formatTimeGap(createdAt),
+      type: log.intent === "DELIVERY" ? "message" : "bell",
+      tags: log.intent ? [log.intent] : ["방문"],
+      deviceUid: log.deviceUid,
+      createdAt,
+      raw: log,
+    };
+  };
+
   const triggerHardwareAlert = async (status) => {
     try {
-      if (status === 'incoming') {
-        // 설정창에서 세이브한 소리/진동 비밀장부 꺼내기
+      if (status === "incoming") {
         const vibSetting = await AsyncStorage.getItem("callVibrate");
-        console.log("📳 [하드웨어 검문] 현재 인터폰 진동 설정 값:", vibSetting);
 
-        if (vibSetting === "true") {
-          console.log("📳 [원격 모터 작동] 1초 진동 루프 패턴 무한 무전 발포!!! 슛!");
-          // [0초 대기, 1초 진동, 1초 쉬고] 패턴 가동, true는 호출 종료 전까지 무한 루프 반복!
-          Vibration.vibrate([0, 1000, 1000], true); 
-        }
-      } else {
-        // idle 상태거나 통화방 진입 시 모터 즉시 소멸 청소!
-        Vibration.cancel();
-      }
-    } catch (e) {
-      console.error("진동 제어 찐빠 발생:", e);
-    }
-  };
-
-  // =========================================================
-  // 🔥 [명세서 4-4 실전 동기화 및 500 폭파 전면 진압 구역]
-  // =========================================================
-  const checkHomeActiveSession = async (isSilent = false) => {
-    try {
-      if (!isSilent) setIsLoading(true);
-      
-      // 📥 [비밀금고 개방] 기기 저장소에서 진짜 토큰 로드
-      const savedToken = await AsyncStorage.getItem("accessToken");
-      setToken(savedToken); 
-
-      const deviceUid = "DEVICE-001";
-      
-      // 🎯 [수술 부역 1] 엔드포인트 세션 주소 오염 및 꼬임 차단
-      const response = await axios.get(`${BASE_URL}/api/sessions/current?deviceUid=${deviceUid}`).catch((err) => {
-        console.log("⚠️ 백엔드 세션 DB 조회 500 에러 감지 -> 가상 세션 가드 발동쇼 🤙");
-        return { data: { success: true, data: { status: "IDLE", sessionId: null } } };
-      });
-      
-      if (response.data.success) {
-        const sessionData = response.data.data;
-        
-        if (sessionData && (sessionData.status === "OPEN" || sessionData.status === "incoming")) {
-          // ⚠️ 이전 상태가 idle이었다가 최초로 incoming으로 바뀌는 골든 타이밍 포착!
-          if (intercomStatus !== 'incoming') {
-            console.log("➡️ [실전 하드웨어 감지] 찐 통화 개통 신호 수신 완료! 벨 울림 기동 🔑");
-            triggerHardwareAlert('incoming'); 
-          }
-          setActiveSessionId(sessionData.sessionId || 1);
-          setIntercomStatus('incoming');
-          navigation.setParams({ intercomStatus: 'incoming' });
-        } else {
-          // 호출이 끝나 리셋되는 구역
-          if (intercomStatus === 'incoming') {
-            triggerHardwareAlert('idle'); 
-          }
-          setActiveSessionId(null);
-          setIntercomStatus('idle');
-          navigation.setParams({ intercomStatus: 'idle' });
-        }
-      } else {
-        if (intercomStatus === 'incoming') triggerHardwareAlert('idle');
-        setActiveSessionId(null);
-        setIntercomStatus('idle');
-        navigation.setParams({ intercomStatus: 'idle' });
-      }
-
-      // 2. 🎯 [하단 최근 호출 이력 찐 연동]
-      if (savedToken && !isSilent) {
-        const logResponse = await axios.get(`${BASE_URL}/api/intercom-logs/recent`, {
-          headers: { Authorization: `Bearer ${savedToken}` }
-        }).catch(() => {
-          return { data: { success: true, data: [] } };
+        logHome("호출 진동 설정 확인", {
+          callVibrate: vibSetting,
         });
 
-        if (logResponse.data.success && logResponse.data.data) {
-          // 🚀 [수철님 지침 완벽 수용] 홈 화면 디자인 밸런스를 위해 딱 최신 2건만 잘라서 보여줍니다!
-          setRecentCalls(logResponse.data.data.slice(0, 2)); 
+        if (vibSetting === "true") {
+          Vibration.vibrate([0, 1000, 1000], true);
+          logHome("호출 진동 시작");
         }
+      } else {
+        Vibration.cancel();
+        logHome("호출 진동 중지");
       }
-
     } catch (error) {
-      console.log("🚨 [홈화면 라이브 에러 세이프티 가드 복구 완료]:", error.message);
-      if (intercomStatus === 'incoming') triggerHardwareAlert('idle');
-      
-      setIntercomStatus('idle');
-      navigation.setParams({ intercomStatus: 'idle' });
-    } finally {
-      if (!isSilent) setIsLoading(false);
+      logHome("진동 제어 실패", error?.message);
     }
   };
 
-  // =========================================================
-  // ⚡ [🚨 찐 라이브 연동 치트키] 3초 주기 홈 화면 한정 추적 폴링 엔진 가동!
-  // =========================================================
+  const fetchRecentLogs = async (savedToken) => {
+    if (!savedToken) {
+      setRecentCalls([]);
+      logHome("최근 호출 이력 조회 생략 - accessToken 없음");
+      return;
+    }
+
+    try {
+      const logResponse = await axios.get(`${BASE_URL}/api/intercom-logs`, {
+        headers: {
+          Authorization: `Bearer ${savedToken}`,
+        },
+      });
+
+      const rawLogs = extractIntercomLogs(logResponse.data);
+
+      logHome("최근 호출 이력 원본 응답", {
+        isArrayResponse: Array.isArray(logResponse.data),
+        success: logResponse.data?.success,
+        rawCount: rawLogs.length,
+      });
+
+      const mappedLogs = rawLogs
+        .filter((log) => log)
+        .sort((a, b) => getSortTime(b) - getSortTime(a))
+        .slice(0, 4)
+        .map(mapRecentLogItem);
+
+      setRecentCalls(mappedLogs);
+
+      logHome("최근 호출 이력 조회 완료", {
+        total: rawLogs.length,
+        displayed: mappedLogs.length,
+      });
+    } catch (error) {
+      const serverError =
+        error.response?.data?.message ||
+        JSON.stringify(error.response?.data) ||
+        error.message;
+
+      logHome("최근 호출 이력 조회 실패", serverError);
+      setRecentCalls([]);
+    }
+  };
+
+  const checkHomeActiveSession = async (isSilent = false) => {
+    let savedToken = null;
+
+    try {
+      if (!isSilent) {
+        setIsLoading(true);
+        logHome("홈 상태 초기 조회 시작");
+      }
+
+      savedToken = await AsyncStorage.getItem("accessToken");
+      setToken(savedToken);
+
+      const deviceUid = "DEVICE-001";
+
+      logHome("현재 세션 조회 요청", {
+        deviceUid,
+        hasToken: Boolean(savedToken),
+        silent: isSilent,
+      });
+
+      let response = null;
+
+      try {
+        response = await axios.get(
+          `${BASE_URL}/api/sessions/current?deviceUid=${deviceUid}`,
+          {
+            headers: {
+              ...(savedToken ? { Authorization: `Bearer ${savedToken}` } : {}),
+            },
+          }
+        );
+      } catch (error) {
+        const serverError =
+          error.response?.data?.message ||
+          JSON.stringify(error.response?.data) ||
+          error.message;
+
+        logHome("현재 세션 조회 실패", serverError);
+      }
+
+      if (response?.data?.success) {
+        const sessionData = response.data?.data || null;
+        const nextSessionId = sessionData ? getSessionId(sessionData) : null;
+        const sessionStatus = sessionData ? getSessionStatus(sessionData) : "";
+        const isIncoming = Boolean(
+          sessionData && nextSessionId && isActiveSession(sessionData)
+        );
+
+        logHome("현재 세션 응답", {
+          exists: Boolean(sessionData),
+          sessionId: nextSessionId,
+          status: sessionStatus || null,
+          endedAt: sessionData?.endedAt || null,
+          isIncoming,
+        });
+
+        if (isIncoming) {
+          if (intercomStatusRef.current !== "incoming") {
+            triggerHardwareAlert("incoming");
+          }
+
+          updateIntercomStatus(
+            "incoming",
+            "active session detected",
+            nextSessionId
+          );
+        } else {
+          if (intercomStatusRef.current === "incoming") {
+            triggerHardwareAlert("idle");
+          }
+
+          updateIntercomStatus("idle", "no active session", null);
+        }
+      } else {
+        logHome("현재 세션 없음 또는 응답 확인 필요", response?.data);
+
+        if (intercomStatusRef.current === "incoming") {
+          triggerHardwareAlert("idle");
+        }
+
+        updateIntercomStatus("idle", "current session response empty", null);
+      }
+
+      if (!isSilent) {
+        await fetchRecentLogs(savedToken);
+      }
+    } catch (error) {
+      const serverError =
+        error.response?.data?.message ||
+        JSON.stringify(error.response?.data) ||
+        error.message;
+
+      logHome("홈 화면 상태 조회 실패", serverError);
+
+      if (intercomStatusRef.current === "incoming") {
+        triggerHardwareAlert("idle");
+      }
+
+      updateIntercomStatus("idle", "home status error", null);
+
+      if (!isSilent && savedToken) {
+        await fetchRecentLogs(savedToken);
+      }
+    } finally {
+      if (!isSilent) {
+        setIsLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
     let pollingTimer = null;
 
     if (isFocused) {
+      logHome("화면 포커스 - polling 시작");
+
       checkHomeActiveSession(false);
 
       pollingTimer = setInterval(() => {
-        console.log("🛰️ [라이브 스캔] 홈화면 대기 중 실시간 하드웨어 벨 신호 감지 중...");
-        checkHomeActiveSession(true); 
-      }, 3000); 
+        checkHomeActiveSession(true);
+      }, 3000);
     }
 
-    // 3. 🧼 화면 나가면 진동도 끄고 타이머도 불태워 소멸! (안전 무결성 가드)
     return () => {
       Vibration.cancel();
+
       if (pollingTimer) {
-        console.log("🧹 홈화면 이탈 감지 ➔ 실시간 폴링 엔진 및 진동 안전 일시정지");
         clearInterval(pollingTimer);
+        logHome("화면 이탈 - polling 중지");
       }
     };
   }, [isFocused]);
 
-  // =========================================================
-  // 🎯 메인 상태 박스 터치 시 이동 분기 핸들러
-  // =========================================================
   const handleStatusCardPress = () => {
-    if (intercomStatus === 'incoming') {
-      console.log("🧼 [통화 수락 워프] 대화방 진입으로 인한 하드웨어 진동 파쇄 클린!");
-      Vibration.cancel(); // 전화를 받으러 들어갔으므로 진동 소멸 커맨드 가동!
-      navigation.navigate("IntercomChat", { sessionId: activeSessionId, token: token });
-    } else if (intercomStatus === 'disconnected') {
-      navigation.navigate("QrVerify");
-    } else if (intercomStatus === 'idle') {
-      console.log("▶️ [중첩 워프 가동] MainTab 대문 개방 후 한글 '히스토리' 기지로 주소지 직송 슛!");
-      navigation.navigate("MainTab", {
-        screen: "히스토리"
+    const targetSessionId = activeSessionId || activeSessionIdRef.current;
+
+    logHome("상태 카드 클릭", {
+      intercomStatus,
+      activeSessionId: targetSessionId,
+    });
+
+    if (intercomStatus === "incoming") {
+      Vibration.cancel();
+
+      if (!targetSessionId) {
+        logHome("인터폰 진입 실패 - activeSessionId 없음");
+        Alert.alert("오류", "연결된 인터폰 세션 정보를 찾을 수 없습니다.");
+        checkHomeActiveSession(false);
+        return;
+      }
+
+      navigation.navigate("IntercomChat", {
+        sessionId: targetSessionId,
+        token,
       });
+      return;
     }
+
+    if (intercomStatus === "disconnected") {
+      navigation.navigate("QrVerify");
+      return;
+    }
+
+    navigation.navigate("MainTab", {
+      screen: "히스토리",
+    });
+  };
+
+  const handlePressRecentCall = (item) => {
+    logHome("최근 호출 상세 이동", {
+      logId: item.logId || item.id,
+      sessionId: item.sessionId,
+    });
+
+    navigation.navigate("End", {
+      item,
+      logId: item.logId || item.id,
+      sessionId: item.sessionId,
+      token,
+    });
   };
 
   return (
     <Container>
-      {/* 1. 상단 헤더 영역 */}
       <Header>
         <HeaderLeft>
           <Logo source={bellIcon} resizeMode="contain" />
           <HeaderTitle>
-            {intercomStatus === 'disconnected' ? "로그인 완료" : "Home"}
+            {intercomStatus === "disconnected" ? "로그인 완료" : "홈"}
           </HeaderTitle>
         </HeaderLeft>
-        <TouchableOpacity onPress={() => setModalVisible(true)} style={{ flexDirection: 'row', alignItems: 'center' }}>
+
+        <TouchableOpacity
+          onPress={() => setModalVisible(true)}
+          style={{ flexDirection: "row", alignItems: "center" }}
+        >
           <Ionicons name="information-circle-outline" size={22} color="#555" />
-          <InfoBtnText>앱 사용방법</InfoBtnText>
+          <InfoBtnText>앱 사용법</InfoBtnText>
         </TouchableOpacity>
       </Header>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, paddingBottom: 30 }}>
-        
-        {/* 2. 인터폰 대화 연결 시스템 메인 보드 */}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: 30 }}
+      >
         <SystemBlockContainer>
           <SystemMainLabel>인터폰 대화 연결 시스템</SystemMainLabel>
         </SystemBlockContainer>
 
         {isLoading ? (
-          <LoadingWrapper><ActivityIndicator size="small" color="#06F393" /></LoadingWrapper>
+          <LoadingWrapper>
+            <ActivityIndicator size="small" color="#06F393" />
+          </LoadingWrapper>
         ) : (
-          <MainBannerActionCard 
-            activeOpacity={0.7} 
+          <MainBannerActionCard
+            activeOpacity={0.7}
             onPress={handleStatusCardPress}
           >
             <BannerLeftContainer>
-              <MicIconWrapper bgColor={intercomStatus === 'disconnected' ? '#EAEAEA' : '#F5F5F5'}>
-                <Ionicons 
-                  name={intercomStatus === 'disconnected' ? "mic-off" : "mic"} 
-                  size={24} 
-                  color={intercomStatus === 'incoming' ? '#06F393' : '#999'} 
+              <MicIconWrapper
+                bgColor={
+                  intercomStatus === "disconnected" ? "#EAEAEA" : "#F5F5F5"
+                }
+              >
+                <Ionicons
+                  name={intercomStatus === "disconnected" ? "mic-off" : "mic"}
+                  size={24}
+                  color={intercomStatus === "incoming" ? "#06F393" : "#999"}
                 />
               </MicIconWrapper>
-              
+
               <BannerTextGroup>
                 <BannerMainTitle>
-                  {intercomStatus === 'disconnected' && "디바이스가 연결되지 않았습니다."}
-                  {intercomStatus === 'incoming' && "하드웨어 연결 상태 · 통화 중"}
-                  {intercomStatus === 'idle' && "하드웨어 연결 상태 · 호출 대기 중"}
+                  {intercomStatus === "disconnected" &&
+                    "인터폰 장치가 연결되지 않았습니다."}
+                  {intercomStatus === "incoming" &&
+                    "인터폰 호출이 들어왔습니다."}
+                  {intercomStatus === "idle" &&
+                    "인터폰 호출 대기 중입니다."}
                 </BannerMainTitle>
+
                 <BannerSubDescription>
-                  {intercomStatus === 'disconnected' && "QR 인증을 진행해 주세요."}
-                  {intercomStatus === 'incoming' && "인터폰이 연결되었습니다! (터치하여 진입)"}
-                  {intercomStatus === 'idle' && "현재 걸려온 인터폰 호출이 없습니다."}
+                  {intercomStatus === "disconnected" &&
+                    "QR 인증을 진행해 주세요."}
+                  {intercomStatus === "incoming" &&
+                    "눌러서 실시간 대화를 확인하세요."}
+                  {intercomStatus === "idle" &&
+                    "현재 걸려온 인터폰 호출이 없습니다."}
                 </BannerSubDescription>
               </BannerTextGroup>
             </BannerLeftContainer>
 
-            {/* 우측 동적 액션 버튼 매칭 */}
-            {intercomStatus === 'disconnected' && (
-              <ActionButtonStyle bgColor="#4A72B2"><ActionBtnText>QR 인증</ActionBtnText></ActionButtonStyle>
+            {intercomStatus === "disconnected" && (
+              <ActionButtonStyle bgColor="#4A72B2">
+                <ActionBtnText>QR 인증</ActionBtnText>
+              </ActionButtonStyle>
             )}
-            {intercomStatus === 'incoming' && (
-              <ActionButtonStyle bgColor="#06F393"><ActionBtnText>인터폰</ActionBtnText></ActionButtonStyle>
+
+            {intercomStatus === "incoming" && (
+              <ActionButtonStyle bgColor="#06F393">
+                <ActionBtnText>확인</ActionBtnText>
+              </ActionButtonStyle>
             )}
-            {intercomStatus === 'idle' && (
-              <ActionButtonStyle bgColor="#EAEAEA"><ActionBtnText style={{ color: '#999' }}>대기</ActionBtnText></ActionButtonStyle>
+
+            {intercomStatus === "idle" && (
+              <ActionButtonStyle bgColor="#EAEAEA">
+                <ActionBtnText style={{ color: "#999" }}>대기</ActionBtnText>
+              </ActionButtonStyle>
             )}
           </MainBannerActionCard>
         )}
 
-        {/* 3. 최근 호출 이력 섹션 (홈화면 전용 2건 노출) */}
         <SectionTitle>최근 호출 이력</SectionTitle>
+
         <ResultListGroup style={{ flex: 1 }}>
           {recentCalls.length > 0 ? (
             recentCalls.map((item, idx) => (
-              <RecentCallItem 
-                key={item.id || idx} 
-                item={item} 
-                token={token} 
-                onPress={() => navigation.navigate("End", { item: item, logId: item.id, token: token })}
+              <RecentCallItem
+                key={item.id || idx}
+                item={item}
+                token={token || "READY"}
+                onPress={() => handlePressRecentCall(item)}
               />
             ))
           ) : (
@@ -259,25 +672,32 @@ export default function HomeScreen() {
             </EmptyHistoryContainer>
           )}
         </ResultListGroup>
-
       </ScrollView>
 
-      {/* 4. 앱 사용방법 팝업 */}
-      <Modal animationType="fade" transparent={true} visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
         <ModalOverlay activeOpacity={1} onPress={() => setModalVisible(false)}>
           <ModalContent>
             <ModalHeader>
-              <ModalHeaderText>앱 사용방법</ModalHeaderText>
+              <ModalHeaderText>앱 사용법</ModalHeaderText>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
             </ModalHeader>
-            <GuideText>1. 인터폰 호출 확인 (푸시 알림)</GuideText>
-            <GuideText>2. 앱 접속 후 실시간 자막 확인</GuideText>
-            <GuideText>3. 상용구 또는 직접 입력으로 대답</GuideText>
-            <GuideText>4. 인터폰 스피커로 답변 전달</GuideText>
-            <GuideText>5. 대화 종료 및 기록 확인</GuideText>
-            <CloseBtn onPress={() => setModalVisible(false)}><CloseBtnText>확인</CloseBtnText></CloseBtn>
+
+            <GuideText>1. 인터폰 호출 알림을 확인합니다.</GuideText>
+            <GuideText>2. 앱에서 실시간 자막을 확인합니다.</GuideText>
+            <GuideText>3. 빠른 응답 또는 직접 입력으로 답변합니다.</GuideText>
+            <GuideText>4. 답변이 인터폰 스피커로 전달됩니다.</GuideText>
+            <GuideText>5. 통화 종료 후 기록을 확인할 수 있습니다.</GuideText>
+
+            <CloseBtn onPress={() => setModalVisible(false)}>
+              <CloseBtnText>확인</CloseBtnText>
+            </CloseBtn>
           </ModalContent>
         </ModalOverlay>
       </Modal>
@@ -285,38 +705,201 @@ export default function HomeScreen() {
   );
 }
 
-/* ================= 스타일 정의 ================= */
-const Container = styled(SafeAreaView)` flex: 1; background-color: #FFFFFF; `;
-const Header = styled.View` flex-direction: row; justify-content: space-between; align-items: center; padding: 15px 20px; background-color: #FFFFFF; border-bottom-width: 1px; border-bottom-color: #F0F0F0; `;
-const HeaderLeft = styled.View` flex-direction: row; align-items: center; `;
-const Logo = styled.Image` width: 32px; height: 32px; margin-right: 8px; `;
-const HeaderTitle = styled.Text` font-size: 20px; font-weight: 800; color: #111; `;
-const InfoBtnText = styled.Text` font-size: 14px; font-weight: 600; color: #555; margin-left: 4px; `;
+const Container = styled(SafeAreaContainer)`
+  flex: 1;
+  background-color: #FFFFFF;
+`;
 
-const SystemBlockContainer = styled.View` flex-direction: row; justify-content: space-between; align-items: center; margin: 25px 20px 10px; `;
-const SystemMainLabel = styled.Text` font-size: 15px; color: #555; font-weight: 700; `;
+const Header = styled.View`
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 20px;
+  background-color: #FFFFFF;
+  border-bottom-width: 1px;
+  border-bottom-color: #F0F0F0;
+`;
 
-const MainBannerActionCard = styled.TouchableOpacity` flex-direction: row; justify-content: space-between; align-items: center; background-color: #FFFFFF; margin: 0 20px 25px; padding: 18px 15px; border-radius: 16px; elevation: 4; shadow-color: #000; shadow-opacity: 0.06; shadow-radius: 8px; border-width: 1px; border-color: #F0F0F0; `;
-const BannerLeftContainer = styled.View` flex-direction: row; align-items: center; flex: 1; margin-right: 10px; `;
-const MicIconWrapper = styled.View` width: 44px; height: 44px; border-radius: 22px; background-color: ${props => props.bgColor}; justify-content: center; align-items: center; margin-right: 12px; `;
-const BannerTextGroup = styled.View` flex: 1; `;
-const BannerMainTitle = styled.Text` font-size: 14px; font-weight: 800; color: #222; `;
-const BannerSubDescription = styled.Text` font-size: 12px; color: #999; margin-top: 4px; font-weight: 500; `;
+const HeaderLeft = styled.View`
+  flex-direction: row;
+  align-items: center;
+`;
 
-const ActionButtonStyle = styled.View` background-color: ${props => props.bgColor}; padding: 10px 16px; border-radius: 10px; justify-content: center; align-items: center; min-width: 70px; `;
-const ActionBtnText = styled.Text` color: white; font-weight: 800; font-size: 13px; `;
+const Logo = styled.Image`
+  width: 32px;
+  height: 32px;
+  margin-right: 8px;
+`;
 
-const SectionTitle = styled.Text` font-size: 15px; font-weight: 700; color: #555; margin: 10px 20px 15px; `;
-const ResultListGroup = styled.View` background-color: #fff; padding-horizontal: 5px; `;
+const HeaderTitle = styled.Text`
+  font-size: 20px;
+  font-weight: 800;
+  color: #111;
+`;
 
-const ModalOverlay = styled.TouchableOpacity` flex: 1; background-color: rgba(0,0,0,0.5); justify-content: center; align-items: center; `;
-const ModalContent = styled.View` width: 85%; background-color: white; border-radius: 25px; padding: 25px; `;
-const ModalHeader = styled.View` flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 20px; `;
-const ModalHeaderText = styled.Text` font-size: 18px; font-weight: 800; color: #111; `;
-const GuideText = styled.Text` font-size: 14px; color: #444; margin-bottom: 15px; line-height: 22px; font-weight: 600; `;
-const CloseBtn = styled.TouchableOpacity` background-color: #06F393; padding: 14px; border-radius: 12px; align-items: center; margin-top: 10px; `;
-const CloseBtnText = styled.Text` color: white; font-weight: 800; font-size: 16px; `;
-const LoadingWrapper = styled.View` padding: 40px; justify-content: center; align-items: center; `;
+const InfoBtnText = styled.Text`
+  font-size: 14px;
+  font-weight: 600;
+  color: #555;
+  margin-left: 4px;
+`;
 
-const EmptyHistoryContainer = styled.View` flex: 1; justify-content: center; align-items: center; padding: 60px 20px; `;
-const EmptyHistoryText = styled.Text` font-size: 14px; color: #CCC; font-weight: 600; margin-top: 10px; text-align: center; `;
+const SystemBlockContainer = styled.View`
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  margin: 25px 20px 10px;
+`;
+
+const SystemMainLabel = styled.Text`
+  font-size: 15px;
+  color: #555;
+  font-weight: 700;
+`;
+
+const MainBannerActionCard = styled.TouchableOpacity`
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #FFFFFF;
+  margin: 0 20px 25px;
+  padding: 18px 15px;
+  border-radius: 16px;
+  elevation: 4;
+  shadow-color: #000;
+  shadow-opacity: 0.06;
+  shadow-radius: 8px;
+  border-width: 1px;
+  border-color: #F0F0F0;
+`;
+
+const BannerLeftContainer = styled.View`
+  flex-direction: row;
+  align-items: center;
+  flex: 1;
+  margin-right: 10px;
+`;
+
+const MicIconWrapper = styled.View`
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
+  background-color: ${(props) => props.bgColor};
+  justify-content: center;
+  align-items: center;
+  margin-right: 12px;
+`;
+
+const BannerTextGroup = styled.View`
+  flex: 1;
+`;
+
+const BannerMainTitle = styled.Text`
+  font-size: 14px;
+  font-weight: 800;
+  color: #222;
+`;
+
+const BannerSubDescription = styled.Text`
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
+  font-weight: 500;
+`;
+
+const ActionButtonStyle = styled.View`
+  background-color: ${(props) => props.bgColor};
+  padding: 10px 16px;
+  border-radius: 10px;
+  justify-content: center;
+  align-items: center;
+  min-width: 70px;
+`;
+
+const ActionBtnText = styled.Text`
+  color: white;
+  font-weight: 800;
+  font-size: 13px;
+`;
+
+const SectionTitle = styled.Text`
+  font-size: 15px;
+  font-weight: 700;
+  color: #555;
+  margin: 10px 20px 15px;
+`;
+
+const ResultListGroup = styled.View`
+  background-color: #fff;
+  padding-horizontal: 5px;
+`;
+
+const ModalOverlay = styled.TouchableOpacity`
+  flex: 1;
+  background-color: rgba(0, 0, 0, 0.5);
+  justify-content: center;
+  align-items: center;
+`;
+
+const ModalContent = styled.View`
+  width: 85%;
+  background-color: white;
+  border-radius: 25px;
+  padding: 25px;
+`;
+
+const ModalHeader = styled.View`
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+`;
+
+const ModalHeaderText = styled.Text`
+  font-size: 18px;
+  font-weight: 800;
+  color: #111;
+`;
+
+const GuideText = styled.Text`
+  font-size: 14px;
+  color: #444;
+  margin-bottom: 15px;
+  line-height: 22px;
+  font-weight: 600;
+`;
+
+const CloseBtn = styled.TouchableOpacity`
+  background-color: #06F393;
+  padding: 14px;
+  border-radius: 12px;
+  align-items: center;
+  margin-top: 10px;
+`;
+
+const CloseBtnText = styled.Text`
+  color: white;
+  font-weight: 800;
+  font-size: 16px;
+`;
+
+const LoadingWrapper = styled.View`
+  padding: 40px;
+  justify-content: center;
+  align-items: center;
+`;
+
+const EmptyHistoryContainer = styled.View`
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+  padding: 60px 20px;
+`;
+
+const EmptyHistoryText = styled.Text`
+  font-size: 14px;
+  color: #CCC;
+  font-weight: 600;
+  margin-top: 10px;
+  text-align: center;
+`;

@@ -73,7 +73,7 @@ export default function AdminDashboardScreen() {
   // 🧼 [클린 소멸 마감] 마스터 로그아웃 안전벨트 장치
   // =========================================================
   const handleAdminLogout = async () => {
-    Alert.alert("로그아웃", "관리자 관제 시스템을 안전하게 종료하시겠습니까? 잉~ 🤙", [
+    Alert.alert("로그아웃", "관리자 관제 시스템을 안전하게 종료하시겠습니까?", [
       { text: "취소", style: "cancel" },
       {
         text: "로그아웃",
