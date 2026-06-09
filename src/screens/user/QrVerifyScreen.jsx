@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from "react-native";
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+} from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import styled from "styled-components/native";
 import { Ionicons } from "@expo/vector-icons";
@@ -17,15 +24,31 @@ export default function QrVerifyScreen({ navigation, route }) {
     requestPermission();
   }, []);
 
-  if (!permission) return <View />; 
+  if (!permission) return <View />;
+
   if (!permission.granted) {
     return (
       <Container>
-        <Text style={{ textAlign: 'center', color: '#666', fontSize: 15, fontWeight: '500' }}>
+        <Text
+          style={{
+            textAlign: "center",
+            color: "#666",
+            fontSize: 15,
+            fontWeight: "500",
+          }}
+        >
           인터폰 단말기 연동을 위해{"\n"}카메라 권한이 필요합니다.
         </Text>
+
         <TouchableOpacity onPress={requestPermission} style={{ marginTop: 25 }}>
-          <Text style={{ color: '#06F393', fontSize: 16, fontWeight: 'bold', textDecorationLine: 'underline' }}>
+          <Text
+            style={{
+              color: "#06F393",
+              fontSize: 16,
+              fontWeight: "bold",
+              textDecorationLine: "underline",
+            }}
+          >
             권한 허용하기
           </Text>
         </TouchableOpacity>
@@ -35,31 +58,53 @@ export default function QrVerifyScreen({ navigation, route }) {
 
   const requestDevicePairing = async (deviceUid) => {
     const realJwtToken = route.params?.token;
+    const safeDeviceUid = String(deviceUid || "").trim();
+
+    if (!safeDeviceUid) {
+      Alert.alert("알림", "코드를 입력해 주세요.");
+      setScanned(false);
+      return;
+    }
 
     try {
       setIsLoading(true);
+
       const response = await axios.post(
         `${BASE_URL}/api/device-pairings`,
-        { deviceUid: deviceUid },
-        { headers: { Authorization: `Bearer ${realJwtToken}`, "Content-Type": "application/json" } }
+        { deviceUid: safeDeviceUid },
+        {
+          headers: {
+            Authorization: `Bearer ${realJwtToken}`,
+            "Content-Type": "application/json",
+          },
+        }
       );
 
       if (response.data.success && response.data.data) {
         await AsyncStorage.setItem("accessToken", realJwtToken);
         await AsyncStorage.setItem("isVerifiedUser", "true");
+        await AsyncStorage.setItem("deviceUid", safeDeviceUid);
 
-        Alert.alert(
-          "연동 완료", 
-          "디바이스가 정상적으로 등록되었습니다!", 
-          [{ text: "확인", onPress: () => navigation.replace("MainTab") }]
-        );
+        Alert.alert("연동 완료", "디바이스가 정상적으로 등록되었습니다!", [
+          {
+            text: "확인",
+            onPress: () => navigation.replace("MainTab"),
+          },
+        ]);
       } else {
         throw new Error(response.data.message || "인증 처리 실패");
       }
     } catch (error) {
+      console.log("QR 인증 실패:", error?.response?.data || error?.message);
+
       // 테스트/시연용: 실패해도 MainTab 이동
-      if (realJwtToken) await AsyncStorage.setItem("accessToken", realJwtToken);
+      if (realJwtToken) {
+        await AsyncStorage.setItem("accessToken", realJwtToken);
+      }
+
       await AsyncStorage.setItem("isVerifiedUser", "true");
+      await AsyncStorage.setItem("deviceUid", safeDeviceUid);
+
       navigation.replace("MainTab");
     } finally {
       setIsLoading(false);
@@ -67,24 +112,34 @@ export default function QrVerifyScreen({ navigation, route }) {
   };
 
   const handleBarCodeScanned = ({ data }) => {
-    setScanned(true); 
+    setScanned(true);
 
     try {
-      if (data.includes("http://") || data.includes("https://") || data.includes("voicenotice://")) {
-        const match = data.match(/deviceUid=([^&]+)/);
-        const parsedDeviceUid = match ? decodeURIComponent(match[1]) : data;
+      const rawData = String(data || "").trim();
+
+      if (
+        rawData.includes("http://") ||
+        rawData.includes("https://") ||
+        rawData.includes("voicenotice://")
+      ) {
+        const match = rawData.match(/deviceUid=([^&]+)/);
+        const parsedDeviceUid = match ? decodeURIComponent(match[1]) : rawData;
+
         requestDevicePairing(parsedDeviceUid);
-      } else {
-        requestDevicePairing(data);
+        return;
       }
+
+      requestDevicePairing(rawData);
     } catch {
       requestDevicePairing(data);
     }
   };
 
   const handleManualVerify = () => {
-    if (manualCode.trim().length > 0) {
-      requestDevicePairing(manualCode.trim()); 
+    const safeCode = manualCode.trim();
+
+    if (safeCode.length > 0) {
+      requestDevicePairing(safeCode);
     } else {
       Alert.alert("알림", "코드를 입력해 주세요.");
     }
@@ -99,9 +154,12 @@ export default function QrVerifyScreen({ navigation, route }) {
       <ScannerContainer>
         <CameraView
           style={StyleSheet.absoluteFillObject}
-          onBarcodeScanned={scanned || isLoading ? undefined : handleBarCodeScanned}
+          onBarcodeScanned={
+            scanned || isLoading ? undefined : handleBarCodeScanned
+          }
           barcodeSettings={{ barcodeTypes: ["qr"] }}
         />
+
         <OverlayContainer>
           <GuideBox>
             <CornerTopLeft />
@@ -113,9 +171,18 @@ export default function QrVerifyScreen({ navigation, route }) {
       </ScannerContainer>
 
       {isLoading ? (
-        <View style={{ marginTop: 40, alignItems: 'center' }}>
+        <View style={{ marginTop: 40, alignItems: "center" }}>
           <ActivityIndicator size="large" color="#06F393" />
-          <Text style={{ color: "#999", marginTop: 12, fontWeight: "600", fontSize: 14 }}>기기 보안 검증 중...</Text>
+          <Text
+            style={{
+              color: "#999",
+              marginTop: 12,
+              fontWeight: "600",
+              fontSize: 14,
+            }}
+          >
+            기기 보안 검증 중...
+          </Text>
         </View>
       ) : (
         <InstructionText>
@@ -132,12 +199,14 @@ export default function QrVerifyScreen({ navigation, route }) {
             placeholderTextColor="#BBB"
             editable={!isLoading}
           />
+
           {manualCode.length > 0 && !isLoading && (
             <TouchableOpacity onPress={() => setManualCode("")}>
               <Ionicons name="close-circle" size={20} color="#CCC" />
             </TouchableOpacity>
           )}
         </InputBox>
+
         <VerifyButton onPress={handleManualVerify} disabled={isLoading}>
           <VerifyButtonText>인증</VerifyButtonText>
         </VerifyButton>
@@ -146,20 +215,125 @@ export default function QrVerifyScreen({ navigation, route }) {
   );
 }
 
-const Container = styled.View` flex: 1; background-color: white; align-items: center; justify-content: center; `;
-const Header = styled.View` margin-bottom: 40px; `;
-const TitleText = styled.Text` font-size: 24px; font-weight: 800; color: #333; `;
-const ScannerContainer = styled.View` width: 280px; height: 280px; background-color: #EEE; border-radius: 20px; overflow: hidden; position: relative; `;
-const OverlayContainer = styled.View` flex: 1; justify-content: center; align-items: center; `;
-const GuideBox = styled.View` width: 200px; height: 200px; position: relative; `;
-const Corner = styled.View` position: absolute; width: 40px; height: 40px; border-color: #FFEB00; `;
-const CornerTopLeft = styled(Corner)` border-top-width: 5px; border-left-width: 5px; top: 0; left: 0; `;
-const CornerTopRight = styled(Corner)` border-top-width: 5px; border-right-width: 5px; top: 0; right: 0; `;
-const CornerBottomLeft = styled(Corner)` border-bottom-width: 5px; border-left-width: 5px; bottom: 0; left: 0; `;
-const CornerBottomRight = styled(Corner)` border-bottom-width: 5px; border-right-width: 5px; bottom: 0; right: 0; `;
-const InstructionText = styled.Text` font-size: 18px; font-weight: 700; color: #555; text-align: center; margin-top: 40px; line-height: 26px; `;
-const InputWrapper = styled.View` position: absolute; bottom: 50px; flex-direction: row; width: 90%; align-items: center; `;
-const InputBox = styled.View` flex: 1; height: 50px; background-color: #F8F9FA; border-radius: 12px; flex-direction: row; align-items: center; padding: 0 15px; margin-right: 10px; border-width: 1px; border-color: #EEE; `;
-const StyledInput = styled.TextInput` flex: 1; font-size: 15px; color: #333; `;
-const VerifyButton = styled.TouchableOpacity` background-color: #06F393; padding: 12px 20px; border-radius: 12px; height: 50px; justify-content: center; `;
-const VerifyButtonText = styled.Text` color: white; font-weight: 800; font-size: 15px; `;
+const Container = styled.View`
+  flex: 1;
+  background-color: white;
+  align-items: center;
+  justify-content: center;
+`;
+
+const Header = styled.View`
+  margin-bottom: 40px;
+`;
+
+const TitleText = styled.Text`
+  font-size: 24px;
+  font-weight: 800;
+  color: #333;
+`;
+
+const ScannerContainer = styled.View`
+  width: 280px;
+  height: 280px;
+  background-color: #EEE;
+  border-radius: 20px;
+  overflow: hidden;
+  position: relative;
+`;
+
+const OverlayContainer = styled.View`
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+`;
+
+const GuideBox = styled.View`
+  width: 200px;
+  height: 200px;
+  position: relative;
+`;
+
+const Corner = styled.View`
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-color: #FFEB00;
+`;
+
+const CornerTopLeft = styled(Corner)`
+  border-top-width: 5px;
+  border-left-width: 5px;
+  top: 0;
+  left: 0;
+`;
+
+const CornerTopRight = styled(Corner)`
+  border-top-width: 5px;
+  border-right-width: 5px;
+  top: 0;
+  right: 0;
+`;
+
+const CornerBottomLeft = styled(Corner)`
+  border-bottom-width: 5px;
+  border-left-width: 5px;
+  bottom: 0;
+  left: 0;
+`;
+
+const CornerBottomRight = styled(Corner)`
+  border-bottom-width: 5px;
+  border-right-width: 5px;
+  bottom: 0;
+  right: 0;
+`;
+
+const InstructionText = styled.Text`
+  font-size: 18px;
+  font-weight: 700;
+  color: #555;
+  text-align: center;
+  margin-top: 40px;
+  line-height: 26px;
+`;
+
+const InputWrapper = styled.View`
+  position: absolute;
+  bottom: 50px;
+  flex-direction: row;
+  width: 90%;
+  align-items: center;
+`;
+
+const InputBox = styled.View`
+  flex: 1;
+  height: 50px;
+  background-color: #F8F9FA;
+  border-radius: 12px;
+  flex-direction: row;
+  align-items: center;
+  padding: 0 15px;
+  margin-right: 10px;
+  border-width: 1px;
+  border-color: #EEE;
+`;
+
+const StyledInput = styled.TextInput`
+  flex: 1;
+  font-size: 15px;
+  color: #333;
+`;
+
+const VerifyButton = styled.TouchableOpacity`
+  background-color: #06F393;
+  padding: 12px 20px;
+  border-radius: 12px;
+  height: 50px;
+  justify-content: center;
+`;
+
+const VerifyButtonText = styled.Text`
+  color: white;
+  font-weight: 800;
+  font-size: 15px;
+`;

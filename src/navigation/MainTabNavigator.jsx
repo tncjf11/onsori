@@ -15,6 +15,30 @@ const tabSetting = require("../assets/tab_setting.png");
 
 const Tab = createBottomTabNavigator();
 
+const ACTIVE_INTERCOM_STATUSES = new Set([
+  "INCOMING",
+  "OPEN",
+  "CALLING",
+  "TALKING",
+  "ONGOING",
+  "ACTIVE",
+  "CONNECTED",
+]);
+
+const BLOCKED_INTERCOM_STATUSES = new Set([
+  "IDLE",
+  "CLOSED",
+  "ENDED",
+  "COMPLETE",
+  "COMPLETED",
+  "FINISHED",
+  "FAILED",
+  "MISSED",
+  "NO_ANSWER",
+  "CANCELED",
+  "CANCELLED",
+]);
+
 const logMainTab = (message, data) => {
   if (data !== undefined) {
     console.log(`[MAIN_TAB] ${message}`, data);
@@ -33,9 +57,24 @@ export default function MainTabNavigator() {
     return tabHome;
   };
 
+  const normalizeStatus = (value) => {
+    return String(value || "idle")
+      .trim()
+      .toUpperCase();
+  };
+
+  const normalizeSessionId = (value) => {
+    if (value === undefined || value === null || value === "") {
+      return null;
+    }
+
+    return value;
+  };
+
   const getMainTabRouteParams = (navigation) => {
     try {
       const parentState = navigation.getParent?.()?.getState?.();
+
       const mainTabRoute = parentState?.routes?.find(
         (route) => route.name === "MainTab"
       );
@@ -50,6 +89,7 @@ export default function MainTabNavigator() {
   const getHomeRouteParams = (navigation) => {
     try {
       const navigationState = navigation.getState();
+
       const homeRoute = navigationState?.routes?.find(
         (route) => route.name === "홈"
       );
@@ -61,32 +101,74 @@ export default function MainTabNavigator() {
     }
   };
 
+  const getIntercomRouteParams = (navigation) => {
+    try {
+      const navigationState = navigation.getState();
+
+      const intercomRoute = navigationState?.routes?.find(
+        (route) => route.name === "인터폰"
+      );
+
+      return intercomRoute?.params || {};
+    } catch (error) {
+      logMainTab("인터폰 route 정보 확인 실패", error?.message);
+      return {};
+    }
+  };
+
+  const getFirstExistingValue = (...values) => {
+    for (const value of values) {
+      if (value !== undefined && value !== null && value !== "") {
+        return value;
+      }
+    }
+
+    return null;
+  };
+
   const getHomeRouteInfo = (navigation) => {
     const parentParams = getMainTabRouteParams(navigation);
     const homeParams = getHomeRouteParams(navigation);
+    const intercomParams = getIntercomRouteParams(navigation);
 
-    const hasParentStatus = Object.prototype.hasOwnProperty.call(
-      parentParams,
-      "intercomStatus"
+    const rawStatus = getFirstExistingValue(
+      parentParams.intercomStatus,
+      homeParams.intercomStatus,
+      intercomParams.intercomStatus,
+      "idle"
     );
 
-    const hasParentSessionId = Object.prototype.hasOwnProperty.call(
-      parentParams,
-      "activeSessionId"
+    const rawSessionId = getFirstExistingValue(
+      parentParams.activeSessionId,
+      parentParams.sessionId,
+      homeParams.activeSessionId,
+      homeParams.sessionId,
+      intercomParams.activeSessionId,
+      intercomParams.sessionId
     );
 
-    const intercomStatus = hasParentStatus
-      ? parentParams.intercomStatus || "idle"
-      : homeParams.intercomStatus || "idle";
-
-    const activeSessionId = hasParentSessionId
-      ? parentParams.activeSessionId || null
-      : homeParams.activeSessionId || null;
+    const intercomStatus = normalizeStatus(rawStatus);
+    const activeSessionId = normalizeSessionId(rawSessionId);
 
     return {
       intercomStatus,
       activeSessionId,
+      parentParams,
+      homeParams,
+      intercomParams,
     };
+  };
+
+  const canEnterIntercom = ({ intercomStatus, activeSessionId }) => {
+    if (!activeSessionId) {
+      return false;
+    }
+
+    if (BLOCKED_INTERCOM_STATUSES.has(intercomStatus)) {
+      return false;
+    }
+
+    return ACTIVE_INTERCOM_STATUSES.has(intercomStatus);
   };
 
   return (
@@ -125,40 +207,37 @@ export default function MainTabNavigator() {
         component={IntercomChatScreen}
         listeners={({ navigation }) => ({
           tabPress: (event) => {
-            const { intercomStatus, activeSessionId } =
-              getHomeRouteInfo(navigation);
+            const routeInfo = getHomeRouteInfo(navigation);
+            const { intercomStatus, activeSessionId } = routeInfo;
 
             logMainTab("인터폰 탭 클릭", {
               intercomStatus,
               activeSessionId,
+              parentParams: routeInfo.parentParams,
+              homeParams: routeInfo.homeParams,
+              intercomParams: routeInfo.intercomParams,
             });
 
-            if (intercomStatus !== "incoming") {
+            if (!canEnterIntercom({ intercomStatus, activeSessionId })) {
               event.preventDefault();
 
-              logMainTab("인터폰 탭 차단 - 현재 호출 없음", {
-                intercomStatus,
-              });
-
-              Alert.alert(
-                "접근 제한",
-                "현재 연결된 인터폰 호출이 없습니다.\n방문객 호출이 들어왔을 때만 진입할 수 있습니다."
-              );
-
-              return;
-            }
-
-            if (!activeSessionId) {
-              event.preventDefault();
-
-              logMainTab("인터폰 탭 차단 - sessionId 없음", {
+              logMainTab("인터폰 탭 차단", {
                 intercomStatus,
                 activeSessionId,
               });
 
+              if (!activeSessionId) {
+                Alert.alert(
+                  "접근 제한",
+                  "현재 연결된 인터폰 호출이 없습니다.\n방문객 호출이 들어왔을 때만 진입할 수 있습니다."
+                );
+
+                return;
+              }
+
               Alert.alert(
-                "세션 확인 중",
-                "인터폰 세션 정보를 확인하는 중입니다.\n잠시 후 다시 시도해 주세요."
+                "접근 제한",
+                "이미 종료되었거나 진행 중인 인터폰 호출이 없습니다."
               );
 
               return;
@@ -168,10 +247,13 @@ export default function MainTabNavigator() {
 
             logMainTab("인터폰 탭 진입 허용", {
               sessionId: activeSessionId,
+              intercomStatus,
             });
 
             navigation.navigate("인터폰", {
               sessionId: activeSessionId,
+              activeSessionId,
+              intercomStatus: "incoming",
               enteredFrom: "mainTab",
               refreshKey: Date.now(),
             });

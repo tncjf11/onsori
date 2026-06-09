@@ -21,6 +21,20 @@ import BASE_URL from "../../api/config";
 const backIcon = require("../../assets/back_icon.png");
 const pencilIcon = require("../../assets/pencil_icon.png");
 
+const CLOSED_SESSION_STATUSES = new Set([
+  "CLOSED",
+  "ENDED",
+  "COMPLETE",
+  "COMPLETED",
+  "FINISHED",
+  "SUCCESS",
+  "FAILED",
+  "MISSED",
+  "NO_ANSWER",
+  "CANCELED",
+  "CANCELLED",
+]);
+
 const logMonitoringDetail = (message, data) => {
   if (data !== undefined) {
     console.log(`[ADMIN_MONITORING_DETAIL] ${message}`, data);
@@ -35,6 +49,8 @@ export default function AdminMonitoringDetailScreen() {
   const isFocused = useIsFocused();
 
   const lastMessageSignatureRef = useRef(null);
+  const isMountedRef = useRef(true);
+  const endedSessionRef = useRef(false);
 
   const { sessionId, item: passedItem } = route.params || {};
 
@@ -46,46 +62,64 @@ export default function AdminMonitoringDetailScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [currentStt, setCurrentStt] = useState("");
   const [selectedMessageKey, setSelectedMessageKey] = useState(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const toKey = (value) => String(value);
 
   const normalizeStatus = (value) => {
-    return String(value || "").toUpperCase();
+    return String(value || "")
+      .trim()
+      .toUpperCase();
   };
 
-  const getSessionStatus = () => {
+  const getSessionStatus = (source = sessionInfo) => {
+    const safeSource = source || {};
+    const safePassedItem = passedItem || {};
+
     return normalizeStatus(
-      sessionInfo?.status ||
-        sessionInfo?.sessionStatus ||
-        passedItem?.status ||
-        passedItem?.sessionStatus ||
+      safeSource.status ||
+        safeSource.sessionStatus ||
+        safeSource.callStatus ||
+        safeSource.state ||
+        safePassedItem.status ||
+        safePassedItem.sessionStatus ||
+        safePassedItem.callStatus ||
+        safePassedItem.state ||
         ""
     );
   };
 
-  const isEndedSession = () => {
-    const status = getSessionStatus();
+  const hasEndedTime = (source = sessionInfo) => {
+    const safeSource = source || {};
+    const safePassedItem = passedItem || {};
 
-    return (
-      status === "CLOSED" ||
-      status === "ENDED" ||
-      status === "COMPLETE" ||
-      status === "COMPLETED" ||
-      status === "FINISHED" ||
-      status === "FAILED" ||
-      status === "MISSED" ||
-      status === "NO_ANSWER"
+    return Boolean(
+      safeSource.endedAt ||
+        safeSource.endTime ||
+        safeSource.closedAt ||
+        safeSource.completedAt ||
+        safeSource.finishedAt ||
+        safePassedItem.endedAt ||
+        safePassedItem.endTime ||
+        safePassedItem.closedAt ||
+        safePassedItem.completedAt ||
+        safePassedItem.finishedAt
     );
   };
 
-  const getSessionNoticeText = () => {
-    if (isEndedSession()) {
-      return "종료된 통화입니다.";
-    }
+  const isEndedSession = (source = sessionInfo) => {
+    const status = getSessionStatus(source);
 
-    return "실시간 자막 확인 중...";
+    if (hasEndedTime(source)) return true;
+    if (CLOSED_SESSION_STATUSES.has(status)) return true;
+
+    return false;
+  };
+
+  const updateEndedSessionRef = (source = sessionInfo) => {
+    const ended = isEndedSession(source);
+    endedSessionRef.current = ended;
+    return ended;
   };
 
   const getMessageId = (msg, idx) => {
@@ -158,6 +192,8 @@ export default function AdminMonitoringDetailScreen() {
       if (!text) return;
       if (text === "실시간 자막 변환 중...") return;
       if (text === "실시간 자막 변환 중") return;
+      if (text === "실시간 자막 확인 중...") return;
+      if (text === "실시간 자막 확인 중") return;
 
       const id = getMessageId(msg, idx);
       const createdAt = msg.createdAt || msg.timestamp || msg.time || "";
@@ -179,7 +215,7 @@ export default function AdminMonitoringDetailScreen() {
     return Array.from(uniqueMap.values());
   };
 
-  const logMessageUpdateIfChanged = (messages) => {
+  const logMessageUpdateIfChanged = (messages, nextSessionInfo = sessionInfo) => {
     const signature = messages
       .map((msg, idx) => {
         const id = getMessageId(msg, idx);
@@ -199,12 +235,23 @@ export default function AdminMonitoringDetailScreen() {
     logMonitoringDetail("메시지 갱신", {
       sessionId: targetSessionId,
       count: messages.length,
-      status: getSessionStatus(),
+      status: getSessionStatus(nextSessionInfo),
+      ended: isEndedSession(nextSessionInfo),
       lastMessageId: lastMessage
         ? getMessageId(lastMessage, messages.length - 1)
         : null,
       lastText: lastMessage ? getMessageText(lastMessage) : null,
     });
+  };
+
+  const extractMessages = (data = {}) => {
+    if (Array.isArray(data.messages)) return data.messages;
+    if (Array.isArray(data.conversationMessages)) return data.conversationMessages;
+    if (Array.isArray(data.transcripts)) return data.transcripts;
+    if (Array.isArray(data.sttMessages)) return data.sttMessages;
+    if (Array.isArray(data.logs)) return data.logs;
+
+    return [];
   };
 
   const fetchLiveChatLogs = async (isSilent = false) => {
@@ -213,22 +260,21 @@ export default function AdminMonitoringDetailScreen() {
 
       if (!isSilent) {
         Alert.alert("오류", "세션 정보를 찾을 수 없습니다.");
-        setIsLoading(false);
+
+        if (isMountedRef.current) {
+          setIsLoading(false);
+        }
       }
 
       return;
     }
 
     try {
-      if (!isSilent) {
+      if (!isSilent && isMountedRef.current) {
         setIsLoading(true);
         logMonitoringDetail("상세 초기 조회 시작", {
           sessionId: targetSessionId,
         });
-      }
-
-      if (isSilent && !isEndedSession()) {
-        setIsRefreshing(true);
       }
 
       const token = await AsyncStorage.getItem("adminToken");
@@ -256,44 +302,43 @@ export default function AdminMonitoringDetailScreen() {
       if (response.data?.success && response.data?.data) {
         const data = response.data.data;
 
-        setSessionInfo((prev) => ({
-          ...prev,
+        const nextSessionInfo = {
+          ...sessionInfo,
           ...data,
-        }));
+        };
 
-        const rawMessages =
-          data.messages ||
-          data.conversationMessages ||
-          data.transcripts ||
-          [];
+        const normalizedMessages = normalizeMessages(extractMessages(data));
+        const ended = updateEndedSessionRef(nextSessionInfo);
 
-        const normalizedMessages = normalizeMessages(rawMessages);
+        if (isMountedRef.current) {
+          setSessionInfo(nextSessionInfo);
+          setChatMessages(normalizedMessages);
+        }
 
-        logMessageUpdateIfChanged(normalizedMessages);
-        setChatMessages(normalizedMessages);
+        logMessageUpdateIfChanged(normalizedMessages, nextSessionInfo);
 
-        const nextStatus = normalizeStatus(data.status || data.sessionStatus);
-
-        if (
-          nextStatus === "CLOSED" ||
-          nextStatus === "ENDED" ||
-          nextStatus === "COMPLETE" ||
-          nextStatus === "COMPLETED" ||
-          nextStatus === "FINISHED" ||
-          nextStatus === "FAILED" ||
-          nextStatus === "MISSED" ||
-          nextStatus === "NO_ANSWER"
-        ) {
-          logMonitoringDetail("종료된 세션 감지", {
+        if (ended) {
+          logMonitoringDetail("종료된 세션 감지 - polling 중단 대상", {
             sessionId: targetSessionId,
-            status: nextStatus,
+            status: getSessionStatus(nextSessionInfo),
+            endedAt:
+              nextSessionInfo.endedAt ||
+              nextSessionInfo.endTime ||
+              nextSessionInfo.closedAt ||
+              null,
           });
         }
-      } else {
-        logMonitoringDetail("상세 조회 응답 확인 필요", response.data);
+
+        return;
+      }
+
+      logMonitoringDetail("상세 조회 응답 확인 필요", response.data);
+
+      if (isMountedRef.current) {
         setChatMessages([]);
       }
     } catch (error) {
+      const serverStatus = error.response?.status;
       const serverError =
         error.response?.data?.message ||
         JSON.stringify(error.response?.data) ||
@@ -301,17 +346,43 @@ export default function AdminMonitoringDetailScreen() {
 
       logMonitoringDetail("실시간 통화 상세 조회 실패", {
         sessionId: targetSessionId,
+        status: serverStatus,
         error: serverError,
       });
+
+      if (serverStatus === 404 || serverStatus === 410) {
+        const nextSessionInfo = {
+          ...sessionInfo,
+          status: "ENDED",
+        };
+
+        updateEndedSessionRef(nextSessionInfo);
+
+        if (isMountedRef.current) {
+          setSessionInfo(nextSessionInfo);
+        }
+
+        return;
+      }
 
       if (!isSilent) {
         Alert.alert("오류", "실시간 통화 정보를 불러오지 못했습니다.");
       }
     } finally {
-      if (!isSilent) setIsLoading(false);
-      if (isSilent) setIsRefreshing(false);
+      if (!isSilent && isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    updateEndedSessionRef(sessionInfo);
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (isFocused) {
@@ -326,10 +397,10 @@ export default function AdminMonitoringDetailScreen() {
   useEffect(() => {
     if (!isFocused || !targetSessionId) return;
 
-    if (isEndedSession()) {
+    if (isEndedSession(sessionInfo) || endedSessionRef.current) {
       logMonitoringDetail("종료된 세션 - polling 시작 안 함", {
         sessionId: targetSessionId,
-        status: getSessionStatus(),
+        status: getSessionStatus(sessionInfo),
       });
       return;
     }
@@ -340,6 +411,17 @@ export default function AdminMonitoringDetailScreen() {
     });
 
     const intervalId = setInterval(() => {
+      if (endedSessionRef.current || isEndedSession(sessionInfo)) {
+        clearInterval(intervalId);
+
+        logMonitoringDetail("종료된 세션 감지 - polling 중지", {
+          sessionId: targetSessionId,
+          status: getSessionStatus(sessionInfo),
+        });
+
+        return;
+      }
+
       fetchLiveChatLogs(true);
     }, 3000);
 
@@ -349,7 +431,17 @@ export default function AdminMonitoringDetailScreen() {
         sessionId: targetSessionId,
       });
     };
-  }, [isFocused, targetSessionId, sessionInfo?.status, sessionInfo?.sessionStatus]);
+  }, [
+    isFocused,
+    targetSessionId,
+    sessionInfo?.status,
+    sessionInfo?.sessionStatus,
+    sessionInfo?.callStatus,
+    sessionInfo?.state,
+    sessionInfo?.endedAt,
+    sessionInfo?.endTime,
+    sessionInfo?.closedAt,
+  ]);
 
   const handleSelectMessage = (msg, idx) => {
     const messageKey = toKey(getMessageId(msg, idx));
@@ -513,15 +605,17 @@ export default function AdminMonitoringDetailScreen() {
     if (!isoString) return null;
 
     try {
+      const stringValue = String(isoString).trim();
+
       const hasExplicitTimezone =
-        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
-        const date = new Date(isoString);
+        const date = new Date(stringValue);
         return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const normalized = isoString.replace("T", " ");
+      const normalized = stringValue.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
@@ -567,6 +661,8 @@ export default function AdminMonitoringDetailScreen() {
     return true;
   };
 
+  const ended = isEndedSession(sessionInfo);
+
   return (
     <Container>
       <Header>
@@ -606,6 +702,10 @@ export default function AdminMonitoringDetailScreen() {
                   const text = String(getMessageText(msg)).trim();
 
                   if (!text) return null;
+                  if (text === "실시간 자막 변환 중...") return null;
+                  if (text === "실시간 자막 변환 중") return null;
+                  if (text === "실시간 자막 확인 중...") return null;
+                  if (text === "실시간 자막 확인 중") return null;
 
                   return (
                     <TouchableOpacity
@@ -634,9 +734,9 @@ export default function AdminMonitoringDetailScreen() {
                 </EmptyWrapper>
               )}
 
-              {(isRefreshing || isEndedSession()) && (
-                <RefreshingText isEnded={isEndedSession()}>
-                  {getSessionNoticeText()}
+              {ended && (
+                <RefreshingText isEnded={ended}>
+                  종료된 통화입니다.
                 </RefreshingText>
               )}
             </ScrollView>
@@ -660,9 +760,7 @@ export default function AdminMonitoringDetailScreen() {
             value={currentStt}
             onChangeText={setCurrentStt}
             placeholder={
-              isEndedSession()
-                ? "종료된 통화입니다"
-                : "수정할 자막을 선택하세요"
+              ended ? "종료된 통화입니다" : "수정할 자막을 선택하세요"
             }
             placeholderTextColor="#BBB"
           />

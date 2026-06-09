@@ -11,6 +11,36 @@ const iconUser = require("../../assets/icon_user.png");
 const iconDeviceId = require("../../assets/icon_device_id.png");
 const searchIcon = require("../../assets/search_icon.png");
 
+const VISIT_TYPES = [
+  "관리실",
+  "택배",
+  "배달",
+  "방문판매",
+  "공사/점검",
+  "지인/가족",
+  "미확인",
+];
+
+const SITUATIONS = ["미응답", "긴급", "공지", "확인요청"];
+
+const DETAIL_KEYWORDS = [
+  "식품",
+  "점검",
+  "수리",
+  "요금/부과",
+  "서류/카드",
+  "안내/통지",
+  "방문예약",
+];
+
+const logAdminHistory = (message, data) => {
+  if (data !== undefined) {
+    console.log(`[ADMIN_HISTORY] ${message}`, data);
+  } else {
+    console.log(`[ADMIN_HISTORY] ${message}`);
+  }
+};
+
 export default function AdminHistoryScreen() {
   const navigation = useNavigation();
 
@@ -24,6 +54,8 @@ export default function AdminHistoryScreen() {
   const [selectedVisitTypes, setSelectedVisitTypes] = useState([]);
   const [selectedSituations, setSelectedSituations] = useState([]);
   const [selectedKeywords, setSelectedKeywords] = useState([]);
+
+  const trimValue = (value) => String(value || "").trim();
 
   const toggleTag = (tag, list, setList) => {
     if (list.includes(tag)) {
@@ -41,44 +73,117 @@ export default function AdminHistoryScreen() {
     }));
   };
 
-  const handleSearch = () => {
-    const keywordInput = searchParams.keyword.trim();
-    const tagKeyword = selectedKeywords.join(",");
-    const finalKeyword = keywordInput || tagKeyword;
+  const getSituationStatusCandidates = (situation) => {
+    if (situation === "미응답") {
+      return ["FAILED", "MISSED", "NO_ANSWER", "CANCELED", "CANCELLED"];
+    }
 
+    if (situation === "긴급") {
+      return ["URGENT"];
+    }
+
+    if (situation === "공지") {
+      return ["NOTICE"];
+    }
+
+    if (situation === "확인요청") {
+      return ["CHECK_REQUEST", "CONFIRM_REQUEST"];
+    }
+
+    return [];
+  };
+
+  const buildApiPayload = ({
+    keywordInput,
+    finalKeyword,
+    dateRange,
+    userId,
+    deviceId,
+  }) => {
     const apiPayload = {};
 
     if (finalKeyword) {
       apiPayload.keyword = finalKeyword;
     }
 
-    if (searchParams.dateRange.trim()) {
-      apiPayload.date = searchParams.dateRange.trim();
+    if (dateRange) {
+      apiPayload.date = dateRange;
+      apiPayload.dateRange = dateRange;
     }
 
-    if (searchParams.userId.trim()) {
-      apiPayload.userId = searchParams.userId.trim();
+    if (userId) {
+      apiPayload.userId = userId;
     }
 
-    if (searchParams.deviceId.trim()) {
-      apiPayload.deviceUid = searchParams.deviceId.trim();
+    if (deviceId) {
+      apiPayload.deviceUid = deviceId;
+      apiPayload.deviceId = deviceId;
+    }
+
+    if (selectedVisitTypes.length > 0) {
+      apiPayload.visitTypes = selectedVisitTypes;
+      apiPayload.categories = selectedVisitTypes;
     }
 
     if (selectedSituations.length > 0) {
-      apiPayload.status = selectedSituations[0];
+      apiPayload.situations = selectedSituations;
+
+      const statusCandidates = selectedSituations.flatMap(
+        getSituationStatusCandidates
+      );
+
+      if (statusCandidates.length > 0) {
+        apiPayload.statuses = statusCandidates;
+        apiPayload.status = statusCandidates[0];
+      } else {
+        apiPayload.status = selectedSituations[0];
+      }
     }
 
+    if (selectedKeywords.length > 0) {
+      apiPayload.keywords = selectedKeywords;
+
+      if (!keywordInput) {
+        apiPayload.keyword = selectedKeywords.join(",");
+      }
+    }
+
+    return apiPayload;
+  };
+
+  const handleSearch = () => {
+    const keywordInput = trimValue(searchParams.keyword);
+    const dateRange = trimValue(searchParams.dateRange);
+    const userId = trimValue(searchParams.userId);
+    const deviceId = trimValue(searchParams.deviceId);
+
+    const tagKeyword = selectedKeywords.join(",");
+    const finalKeyword = keywordInput || tagKeyword;
+
+    const apiPayload = buildApiPayload({
+      keywordInput,
+      finalKeyword,
+      dateRange,
+      userId,
+      deviceId,
+    });
+
+    const nextSearchParams = {
+      keyword: finalKeyword || "전체",
+      dateRange: dateRange || "전체 기간",
+      userId: userId || "전체 사용자",
+      deviceId: deviceId || "전체 디바이스",
+      visitTypes: selectedVisitTypes,
+      situations: selectedSituations,
+      keywords: selectedKeywords,
+      apiPayload,
+    };
+
+    logAdminHistory("검색 실행", nextSearchParams);
+
     navigation.navigate("AdminHistorySearchResult", {
-      searchParams: {
-        keyword: finalKeyword || "전체",
-        dateRange: searchParams.dateRange.trim() || "전체 기간",
-        userId: searchParams.userId.trim() || "전체 사용자",
-        deviceId: searchParams.deviceId.trim() || "전체 디바이스",
-        visitTypes: selectedVisitTypes,
-        situations: selectedSituations,
-        keywords: selectedKeywords,
-        apiPayload,
-      },
+      searchParams: nextSearchParams,
+      refreshKey: Date.now(),
     });
   };
 
@@ -150,28 +255,26 @@ export default function AdminHistoryScreen() {
         <SectionWrapper>
           <SectionLabel>방문 유형</SectionLabel>
           <TagCloud>
-            {["관리실", "택배", "배달", "방문판매", "공사/점검", "지인/가족", "미확인"].map(
-              (tag) => (
-                <TagItem
-                  key={tag}
-                  active={selectedVisitTypes.includes(tag)}
-                  onPress={() =>
-                    toggleTag(tag, selectedVisitTypes, setSelectedVisitTypes)
-                  }
-                >
-                  <TagText active={selectedVisitTypes.includes(tag)}>
-                    {tag}
-                  </TagText>
-                </TagItem>
-              )
-            )}
+            {VISIT_TYPES.map((tag) => (
+              <TagItem
+                key={tag}
+                active={selectedVisitTypes.includes(tag)}
+                onPress={() =>
+                  toggleTag(tag, selectedVisitTypes, setSelectedVisitTypes)
+                }
+              >
+                <TagText active={selectedVisitTypes.includes(tag)}>
+                  {tag}
+                </TagText>
+              </TagItem>
+            ))}
           </TagCloud>
         </SectionWrapper>
 
         <SectionWrapper>
           <SectionLabel>상황 성격</SectionLabel>
           <TagCloud>
-            {["미응답", "긴급", "공지", "확인요청"].map((tag) => (
+            {SITUATIONS.map((tag) => (
               <TagItem
                 key={tag}
                 active={selectedSituations.includes(tag)}
@@ -190,29 +293,25 @@ export default function AdminHistoryScreen() {
         <SectionWrapper>
           <SectionLabel>세부 키워드</SectionLabel>
           <TagCloud>
-            {["식품", "점검", "수리", "요금/부과", "서류/카드", "안내/통지", "방문예약"].map(
-              (tag) => (
-                <TagItem
-                  key={tag}
-                  active={selectedKeywords.includes(tag)}
-                  onPress={() =>
-                    toggleTag(tag, selectedKeywords, setSelectedKeywords)
-                  }
-                >
-                  <TagText active={selectedKeywords.includes(tag)}>
-                    {tag}
-                  </TagText>
-                </TagItem>
-              )
-            )}
+            {DETAIL_KEYWORDS.map((tag) => (
+              <TagItem
+                key={tag}
+                active={selectedKeywords.includes(tag)}
+                onPress={() =>
+                  toggleTag(tag, selectedKeywords, setSelectedKeywords)
+                }
+              >
+                <TagText active={selectedKeywords.includes(tag)}>
+                  {tag}
+                </TagText>
+              </TagItem>
+            ))}
           </TagCloud>
         </SectionWrapper>
       </ScrollView>
     </Container>
   );
 }
-
-/* ================= 스타일 정의 ================= */
 
 const Container = styled(SafeAreaContainer)`
   flex: 1;

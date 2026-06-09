@@ -27,15 +27,91 @@ export default function AdminHistoryDetailScreen() {
   const isFocused = useIsFocused();
 
   const item = route.params?.item || {};
-  const targetLogId =
-    route.params?.logId ?? item.logId ?? item.id ?? null;
-  const routeSessionId =
-    route.params?.sessionId ?? item.sessionId ?? null;
+  const targetLogId = route.params?.logId ?? item.logId ?? item.id ?? null;
+  const routeSessionId = route.params?.sessionId ?? item.sessionId ?? null;
 
   const [logInfo, setLogInfo] = useState(item);
   const [messages, setMessages] = useState([]);
   const [editHistory, setEditHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  const normalizeStatus = (value) => {
+    return String(value || "")
+      .trim()
+      .toUpperCase();
+  };
+
+  const getLogStatusText = (log = logInfo) => {
+    const status = normalizeStatus(
+      log.status || log.sessionStatus || log.callStatus || log.state || ""
+    );
+
+    const connectionStatus = String(log.connectionStatus || "").trim();
+    const sttStatus = String(log.sttStatus || "").trim();
+
+    const hasEndedAt = Boolean(
+      log.endedAt ||
+        log.endTime ||
+        log.closedAt ||
+        log.completedAt ||
+        log.finishedAt
+    );
+
+    if (
+      hasEndedAt ||
+      connectionStatus === "종료" ||
+      sttStatus === "완료" ||
+      [
+        "SUCCESS",
+        "CLOSED",
+        "ENDED",
+        "COMPLETE",
+        "COMPLETED",
+        "FINISHED",
+      ].includes(status)
+    ) {
+      return "연결 상태: 종료 / STT: 완료";
+    }
+
+    if (
+      connectionStatus === "미응답" ||
+      sttStatus === "중단" ||
+      ["FAILED", "MISSED", "NO_ANSWER", "CANCELED", "CANCELLED"].includes(
+        status
+      )
+    ) {
+      return "연결 상태: 미응답 / STT: 중단";
+    }
+
+    if (
+      connectionStatus === "연결" ||
+      ["OPEN", "CALLING", "TALKING", "ONGOING", "ACTIVE", "CONNECTED"].includes(
+        status
+      )
+    ) {
+      return "연결 상태: 연결 / STT: 진행 중";
+    }
+
+    return `연결 상태: ${connectionStatus || "확인 필요"} / STT: ${
+      sttStatus || "-"
+    }`;
+  };
+
+  const getLogDateValue = (data = {}) => {
+    return (
+      data.createdAt ||
+      data.startedAt ||
+      data.startTime ||
+      data.endedAt ||
+      data.endTime ||
+      data.closedAt ||
+      data.completedAt ||
+      data.finishedAt ||
+      data.timestamp ||
+      data.time ||
+      ""
+    );
+  };
 
   const getMessageText = (msg) => {
     return (
@@ -44,7 +120,7 @@ export default function AdminHistoryDetailScreen() {
       msg.messageText ||
       msg.message ||
       msg.visitorText ||
-      "자막 내용 없음"
+      ""
     );
   };
 
@@ -75,17 +151,61 @@ export default function AdminHistoryDetailScreen() {
     return originalText && currentText && originalText !== currentText;
   };
 
+  const isHiddenMessageText = (text) => {
+    const safeText = String(text || "").trim();
+
+    return (
+      !safeText ||
+      safeText === "실시간 자막 변환 중..." ||
+      safeText === "실시간 자막 변환 중" ||
+      safeText === "실시간 자막 확인 중..." ||
+      safeText === "실시간 자막 확인 중" ||
+      safeText === "자막 내용 없음"
+    );
+  };
+
+  const normalizeMessages = (rawMessages = []) => {
+    if (!Array.isArray(rawMessages)) return [];
+
+    const uniqueMap = new Map();
+
+    rawMessages.forEach((msg, idx) => {
+      const text = String(getMessageText(msg)).trim();
+
+      if (isHiddenMessageText(text)) return;
+
+      const createdAt = getLogDateValue(msg);
+      const key =
+        msg.messageId ??
+        msg.transcriptId ??
+        msg.id ??
+        `${createdAt}-${text}-${idx}`;
+
+      if (uniqueMap.has(key)) return;
+
+      uniqueMap.set(key, {
+        ...msg,
+        id: getMessageId(msg, idx),
+        content: text,
+        createdAt,
+      });
+    });
+
+    return Array.from(uniqueMap.values());
+  };
+
   const buildFallbackMessages = (logData) => {
     if (!logData) return [];
 
     const fallback = [];
+    const baseTime = getLogDateValue(logData);
 
     if (logData.visitorText && logData.visitorText.trim() !== "") {
       fallback.push({
         id: "visitor-text",
         content: logData.visitorText.trim(),
         senderType: "VISITOR",
-        createdAt: logData.createdAt,
+        createdAt: baseTime,
       });
     }
 
@@ -94,7 +214,7 @@ export default function AdminHistoryDetailScreen() {
         id: "resident-reply",
         content: logData.residentReply.trim(),
         senderType: "USER",
-        createdAt: logData.updatedAt || logData.createdAt,
+        createdAt: logData.updatedAt || baseTime,
       });
     }
 
@@ -108,11 +228,20 @@ export default function AdminHistoryDetailScreen() {
         id: "summary-fallback",
         content: `요약: ${logData.summary.trim()}`,
         senderType: "SYSTEM",
-        createdAt: logData.createdAt,
+        createdAt: baseTime,
       });
     }
 
     return fallback;
+  };
+
+  const extractMessages = (data = {}) => {
+    if (Array.isArray(data.messages)) return data.messages;
+    if (Array.isArray(data.conversationMessages)) return data.conversationMessages;
+    if (Array.isArray(data.transcripts)) return data.transcripts;
+    if (Array.isArray(data.sttMessages)) return data.sttMessages;
+
+    return [];
   };
 
   const fetchSessionMessages = async (sessionId, token) => {
@@ -129,7 +258,7 @@ export default function AdminHistoryDetailScreen() {
 
     const data = response.data?.data || {};
 
-    return data.messages || data.conversationMessages || data.transcripts || [];
+    return extractMessages(data);
   };
 
   const fetchHistoryDetail = async () => {
@@ -168,7 +297,11 @@ export default function AdminHistoryDetailScreen() {
         }
       }
 
-      const sessionId = mergedLogInfo.sessionId || routeSessionId;
+      const sessionId =
+        mergedLogInfo.sessionId ||
+        mergedLogInfo.callSessionId ||
+        mergedLogInfo.intercomSessionId ||
+        routeSessionId;
 
       setLogInfo(mergedLogInfo);
 
@@ -183,19 +316,16 @@ export default function AdminHistoryDetailScreen() {
       }
 
       if (!Array.isArray(fetchedMessages) || fetchedMessages.length === 0) {
-        fetchedMessages =
-          mergedLogInfo.messages ||
-          mergedLogInfo.conversationMessages ||
-          mergedLogInfo.transcripts ||
-          buildFallbackMessages(mergedLogInfo);
+        fetchedMessages = [
+          ...extractMessages(mergedLogInfo),
+          ...buildFallbackMessages(mergedLogInfo),
+        ];
       }
 
-      setMessages(Array.isArray(fetchedMessages) ? fetchedMessages : []);
-      setEditHistory(
-        Array.isArray(fetchedMessages)
-          ? fetchedMessages.filter(isEditedMessage)
-          : []
-      );
+      const normalizedMessages = normalizeMessages(fetchedMessages);
+
+      setMessages(normalizedMessages);
+      setEditHistory(normalizedMessages.filter(isEditedMessage));
     } catch (error) {
       const serverError =
         error.response?.data?.message ||
@@ -220,15 +350,17 @@ export default function AdminHistoryDetailScreen() {
     if (!isoString) return null;
 
     try {
+      const stringValue = String(isoString).trim();
+
       const hasExplicitTimezone =
-        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
-        const date = new Date(isoString);
+        const date = new Date(stringValue);
         return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const normalized = isoString.replace("T", " ");
+      const normalized = stringValue.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
@@ -332,14 +464,20 @@ export default function AdminHistoryDetailScreen() {
           contentContainerStyle={{ paddingBottom: 40 }}
         >
           <ChatCard>
+            <SystemMessageBox>
+              <SystemMessageText>{getLogStatusText(logInfo)}</SystemMessageText>
+            </SystemMessageBox>
+
             {messages.length > 0 ? (
               messages.map((msg, idx) => {
                 const isSystem = isSystemMessage(msg);
                 const isVisitor = isVisitorMessage(msg);
-                const msgTime = formatTime(
-                  msg.createdAt || msg.timestamp || msg.time
-                );
-                const messageText = getMessageText(msg);
+                const msgTime = formatTime(getLogDateValue(msg));
+                const messageText = String(getMessageText(msg)).trim();
+
+                if (isHiddenMessageText(messageText)) {
+                  return null;
+                }
 
                 if (isSystem) {
                   return (
@@ -402,7 +540,7 @@ export default function AdminHistoryDetailScreen() {
                       </HistoryMainText>
 
                       <HistoryTime>
-                        {formatDateTime(hist.updatedAt || hist.createdAt)}
+                        {formatDateTime(hist.updatedAt || getLogDateValue(hist))}
                       </HistoryTime>
                     </HistoryHeader>
 
@@ -421,8 +559,6 @@ export default function AdminHistoryDetailScreen() {
     </Container>
   );
 }
-
-/* ================= 스타일 정의 ================= */
 
 const Container = styled(SafeAreaContainer)`
   flex: 1;

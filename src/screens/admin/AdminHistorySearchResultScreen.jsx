@@ -45,6 +45,109 @@ export default function AdminHistorySearchResultScreen() {
     fetchSearchResults();
   }, []);
 
+  const extractIntercomLogs = (responseData) => {
+    if (Array.isArray(responseData?.data)) return responseData.data;
+    if (Array.isArray(responseData)) return responseData;
+    if (Array.isArray(responseData?.content)) return responseData.content;
+    if (Array.isArray(responseData?.logs)) return responseData.logs;
+    if (Array.isArray(responseData?.items)) return responseData.items;
+    if (Array.isArray(responseData?.data?.content)) {
+      return responseData.data.content;
+    }
+    if (Array.isArray(responseData?.data?.logs)) {
+      return responseData.data.logs;
+    }
+    if (Array.isArray(responseData?.data?.items)) {
+      return responseData.data.items;
+    }
+    if (Array.isArray(responseData?.result)) return responseData.result;
+    if (Array.isArray(responseData?.data?.result)) {
+      return responseData.data.result;
+    }
+
+    return [];
+  };
+
+  const getLogDateValue = (item = {}) => {
+    return (
+      item.createdAt ||
+      item.startedAt ||
+      item.startTime ||
+      item.endedAt ||
+      item.endTime ||
+      item.closedAt ||
+      item.completedAt ||
+      item.finishedAt ||
+      item.timestamp ||
+      item.time ||
+      ""
+    );
+  };
+
+  const normalizeStatus = (value) => {
+    return String(value || "")
+      .trim()
+      .toUpperCase();
+  };
+
+  const getStatusText = (item = {}) => {
+    const status = normalizeStatus(
+      item.status ||
+        item.sessionStatus ||
+        item.callStatus ||
+        item.state ||
+        ""
+    );
+
+    const connectionStatus = String(item.connectionStatus || "").trim();
+    const sttStatus = String(item.sttStatus || "").trim();
+
+    const hasEndedAt = Boolean(
+      item.endedAt ||
+        item.endTime ||
+        item.closedAt ||
+        item.completedAt ||
+        item.finishedAt
+    );
+
+    if (
+      hasEndedAt ||
+      connectionStatus === "종료" ||
+      sttStatus === "완료" ||
+      [
+        "SUCCESS",
+        "CLOSED",
+        "ENDED",
+        "COMPLETE",
+        "COMPLETED",
+        "FINISHED",
+      ].includes(status)
+    ) {
+      return "종료 / 완료";
+    }
+
+    if (
+      connectionStatus === "미응답" ||
+      sttStatus === "중단" ||
+      ["FAILED", "MISSED", "NO_ANSWER", "CANCELED", "CANCELLED"].includes(
+        status
+      )
+    ) {
+      return "미응답 / 중단";
+    }
+
+    if (
+      connectionStatus === "연결" ||
+      ["ONGOING", "OPEN", "CALLING", "TALKING", "ACTIVE", "CONNECTED"].includes(
+        status
+      )
+    ) {
+      return "연결 / 진행 중";
+    }
+
+    return `${connectionStatus || "확인 필요"} / ${sttStatus || "-"}`;
+  };
+
   const fetchSearchResults = async () => {
     try {
       setIsLoading(true);
@@ -75,13 +178,20 @@ export default function AdminHistorySearchResultScreen() {
         });
       }
 
-      const rawData = Array.isArray(response.data?.data)
-        ? response.data.data
-        : Array.isArray(response.data)
-          ? response.data
-          : [];
+      const rawData = extractIntercomLogs(response.data);
+      const normalizedData = rawData.map((item, index) => ({
+        ...item,
+        id: item.id ?? item.logId ?? item.intercomLogId ?? index,
+        logId: item.logId ?? item.id ?? item.intercomLogId ?? index,
+        sessionId:
+          item.sessionId ??
+          item.callSessionId ??
+          item.intercomSessionId ??
+          item.session?.id ??
+          null,
+      }));
 
-      const filteredData = applyFrontendFilters(rawData, searchParams);
+      const filteredData = applyFrontendFilters(normalizedData, searchParams);
 
       setSearchResults(filteredData);
     } catch (error) {
@@ -117,14 +227,14 @@ export default function AdminHistorySearchResultScreen() {
 
       if (
         payload.deviceUid &&
-        !String(item.deviceUid || item.deviceId || "")
+        !String(item.deviceUid || item.deviceId || item.device?.deviceUid || "")
           .toLowerCase()
           .includes(String(payload.deviceUid).toLowerCase())
       ) {
         return false;
       }
 
-      if (payload.date && !isSameDate(item.createdAt, payload.date)) {
+      if (payload.date && !isSameDate(item, payload.date)) {
         return false;
       }
 
@@ -145,9 +255,15 @@ export default function AdminHistorySearchResultScreen() {
         : [];
 
       if (selectedSituations.length > 0) {
-        const hasSituation = selectedSituations.some((tag) =>
-          targetText.includes(String(tag).toLowerCase())
-        );
+        const hasSituation = selectedSituations.some((tag) => {
+          const safeTag = String(tag).toLowerCase();
+
+          if (tag === "미응답") {
+            return getStatusText(item) === "미응답 / 중단";
+          }
+
+          return targetText.includes(safeTag);
+        });
 
         if (!hasSituation) return false;
       }
@@ -174,22 +290,33 @@ export default function AdminHistorySearchResultScreen() {
       item.visitorText,
       item.residentReply,
       item.refinedText,
+      item.content,
+      item.message,
+      item.transcript,
       item.intent,
+      item.category,
       item.deviceUid,
       item.deviceId,
       item.userId,
       item.providerUserId,
       item.residentId,
       item.status,
+      item.sessionStatus,
+      item.callStatus,
+      item.connectionStatus,
+      item.sttStatus,
       item.location,
+      item.endedAt,
+      item.endTime,
+      item.closedAt,
     ]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
   };
 
-  const isSameDate = (createdAt, selectedDate) => {
-    const formattedCreatedAt = formatDateOnly(createdAt);
+  const isSameDate = (item, selectedDate) => {
+    const formattedCreatedAt = formatDateOnly(getLogDateValue(item));
     const normalizedSelectedDate = normalizeDateInput(selectedDate);
 
     if (!formattedCreatedAt || !normalizedSelectedDate) {
@@ -220,15 +347,17 @@ export default function AdminHistorySearchResultScreen() {
     if (!isoString) return null;
 
     try {
+      const stringValue = String(isoString).trim();
+
       const hasExplicitTimezone =
-        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
-        const date = new Date(isoString);
+        const date = new Date(stringValue);
         return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const normalized = isoString.replace("T", " ");
+      const normalized = stringValue.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
@@ -269,33 +398,22 @@ export default function AdminHistorySearchResultScreen() {
     return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
   };
 
-  const getDurationText = (item) => {
-    if (item.duration) return item.duration;
-
-    const seconds =
-      item.durationSeconds ??
-      item.callDurationSeconds ??
-      item.totalSeconds ??
-      null;
-
-    if (seconds == null) return "종료됨";
-
-    const minutes = Math.floor(Number(seconds) / 60);
-    const remainSeconds = Number(seconds) % 60;
-
-    if (minutes <= 0) return `${remainSeconds}s`;
-
-    return `${minutes}m ${remainSeconds}s`;
-  };
-
   const getItemTitle = (item) => {
-    return (
-      item.summary ||
-      item.intent ||
-      item.visitorText ||
-      item.deviceUid ||
-      "인터폰 호출 알림"
-    );
+    const summary = String(item.summary || "").trim();
+    const intent = String(item.intent || "").trim();
+    const visitorText = String(item.visitorText || "").trim();
+    const content = String(item.content || "").trim();
+    const message = String(item.message || "").trim();
+    const deviceUid = String(item.deviceUid || "").trim();
+
+    if (summary && summary !== "내용 없음") return summary;
+    if (intent) return intent;
+    if (visitorText) return visitorText;
+    if (content) return content;
+    if (message) return message;
+    if (deviceUid) return deviceUid;
+
+    return "인터폰 호출 알림";
   };
 
   const handlePressItem = (item) => {
@@ -376,7 +494,7 @@ export default function AdminHistorySearchResultScreen() {
                         <ItemTitle numberOfLines={1}>
                           {getItemTitle(item)}
                         </ItemTitle>
-                        <DurationText>{getDurationText(item)}</DurationText>
+                        <DurationText>{getStatusText(item)}</DurationText>
                       </ItemTopRow>
 
                       <ItemBottomRow>
@@ -388,7 +506,9 @@ export default function AdminHistorySearchResultScreen() {
                           </KeywordBadgeText>
                         </KeywordBadge>
 
-                        <ItemTime>{formatDateTime(item.createdAt)}</ItemTime>
+                        <ItemTime>
+                          {formatDateTime(getLogDateValue(item))}
+                        </ItemTime>
                       </ItemBottomRow>
                     </ItemContent>
                   </ListItem>
@@ -405,8 +525,6 @@ export default function AdminHistorySearchResultScreen() {
     </Container>
   );
 }
-
-/* ================= 스타일 정의 ================= */
 
 const Container = styled(SafeAreaContainer)`
   flex: 1;

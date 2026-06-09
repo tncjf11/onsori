@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   ScrollView,
   TouchableOpacity,
@@ -54,6 +54,41 @@ LocaleConfig.defaultLocale = "kr";
 
 const backIcon = require("../../assets/back_icon.png");
 
+const ENDED_SESSION_STATUSES = new Set([
+  "SUCCESS",
+  "CLOSED",
+  "ENDED",
+  "COMPLETE",
+  "COMPLETED",
+  "FINISHED",
+]);
+
+const ACTIVE_SESSION_STATUSES = new Set([
+  "ONGOING",
+  "OPEN",
+  "CALLING",
+  "TALKING",
+  "ACTIVE",
+  "CONNECTED",
+  "INCOMING",
+]);
+
+const FAILED_SESSION_STATUSES = new Set([
+  "FAILED",
+  "MISSED",
+  "NO_ANSWER",
+  "CANCELED",
+  "CANCELLED",
+]);
+
+const logAdminCallLog = (message, data) => {
+  if (data !== undefined) {
+    console.log(`[ADMIN_CALL_LOG] ${message}`, data);
+  } else {
+    console.log(`[ADMIN_CALL_LOG] ${message}`);
+  }
+};
+
 export default function AdminCallLogScreen() {
   const navigation = useNavigation();
   const isFocused = useIsFocused();
@@ -62,6 +97,8 @@ export default function AdminCallLogScreen() {
   const [filteredLogs, setFilteredLogs] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDateModalVisible, setIsDateModalVisible] = useState(false);
+
+  const isMountedRef = useRef(true);
 
   const formatLocalDate = (date) => {
     const yyyy = date.getFullYear();
@@ -81,15 +118,17 @@ export default function AdminCallLogScreen() {
     if (!isoString) return null;
 
     try {
+      const stringValue = String(isoString).trim();
+
       const hasExplicitTimezone =
-        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
-        const date = new Date(isoString);
+        const date = new Date(stringValue);
         return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const normalized = isoString.replace("T", " ");
+      const normalized = stringValue.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
@@ -104,8 +143,24 @@ export default function AdminCallLogScreen() {
     }
   };
 
-  const getDateString = (isoString) => {
-    const date = parseServerDate(isoString);
+  const getLogDateValue = (item = {}) => {
+    return (
+      item.createdAt ||
+      item.startedAt ||
+      item.startTime ||
+      item.endedAt ||
+      item.endTime ||
+      item.closedAt ||
+      item.completedAt ||
+      item.finishedAt ||
+      item.timestamp ||
+      item.time ||
+      ""
+    );
+  };
+
+  const getDateString = (item = {}) => {
+    const date = parseServerDate(getLogDateValue(item));
 
     if (!date || Number.isNaN(date.getTime())) {
       return "";
@@ -114,8 +169,8 @@ export default function AdminCallLogScreen() {
     return formatLocalDate(date);
   };
 
-  const getSortTime = (isoString) => {
-    const date = parseServerDate(isoString);
+  const getSortTime = (item = {}) => {
+    const date = parseServerDate(getLogDateValue(item));
 
     if (!date || Number.isNaN(date.getTime())) {
       return 0;
@@ -124,8 +179,8 @@ export default function AdminCallLogScreen() {
     return date.getTime();
   };
 
-  const formatLogTime = (isoString) => {
-    const date = parseServerDate(isoString);
+  const formatLogTime = (item = {}) => {
+    const date = parseServerDate(getLogDateValue(item));
 
     if (!date || Number.isNaN(date.getTime())) {
       return "00:00";
@@ -138,135 +193,315 @@ export default function AdminCallLogScreen() {
   };
 
   const normalizeStatus = (value) => {
-    return String(value || "").toUpperCase();
+    return String(value || "")
+      .trim()
+      .toUpperCase();
+  };
+
+  const normalizeKoreanStatus = (value) => {
+    return String(value || "").trim();
+  };
+
+  const getStatusCandidates = (item = {}) => {
+    return [
+      item.status,
+      item.sessionStatus,
+      item.callStatus,
+      item.state,
+      item.connectionState,
+    ]
+      .map(normalizeStatus)
+      .filter(Boolean);
+  };
+
+  const hasEndedTime = (item = {}) => {
+    return Boolean(
+      item.endedAt ||
+        item.endTime ||
+        item.closedAt ||
+        item.completedAt ||
+        item.finishedAt
+    );
+  };
+
+  const isEndedLog = (item = {}) => {
+    const statuses = getStatusCandidates(item);
+
+    if (hasEndedTime(item)) return true;
+    if (statuses.some((status) => ENDED_SESSION_STATUSES.has(status))) {
+      return true;
+    }
+
+    const connectionStatus = normalizeKoreanStatus(item.connectionStatus);
+    const sttStatus = normalizeKoreanStatus(item.sttStatus);
+
+    if (connectionStatus === "종료" || sttStatus === "완료") {
+      return true;
+    }
+
+    return false;
+  };
+
+  const isFailedLog = (item = {}) => {
+    const statuses = getStatusCandidates(item);
+
+    if (statuses.some((status) => FAILED_SESSION_STATUSES.has(status))) {
+      return true;
+    }
+
+    const connectionStatus = normalizeKoreanStatus(item.connectionStatus);
+    const sttStatus = normalizeKoreanStatus(item.sttStatus);
+
+    if (connectionStatus === "미응답" || sttStatus === "중단") {
+      return true;
+    }
+
+    return false;
+  };
+
+  const isActiveLog = (item = {}) => {
+    const statuses = getStatusCandidates(item);
+
+    if (statuses.some((status) => ACTIVE_SESSION_STATUSES.has(status))) {
+      return true;
+    }
+
+    const connectionStatus = normalizeKoreanStatus(item.connectionStatus);
+    const sttStatus = normalizeKoreanStatus(item.sttStatus);
+
+    if (connectionStatus === "연결" || sttStatus === "진행 중" || sttStatus === "진행중") {
+      return true;
+    }
+
+    return false;
   };
 
   const getStatusLabels = (item = {}) => {
-    const status = normalizeStatus(
-      item.status ||
-        item.sessionStatus ||
-        item.callStatus ||
-        item.connectionStatus
-    );
-
-    const sttStatus = normalizeStatus(item.sttStatus);
-    const hasEndedTime = Boolean(item.endedAt || item.endTime || item.closedAt);
-
-    const isEnded =
-      hasEndedTime ||
-      status === "SUCCESS" ||
-      status === "CLOSED" ||
-      status === "ENDED" ||
-      status === "COMPLETE" ||
-      status === "COMPLETED" ||
-      status === "FINISHED";
-
-    const isActive =
-      status === "ONGOING" ||
-      status === "OPEN" ||
-      status === "CALLING" ||
-      status === "TALKING" ||
-      status === "ACTIVE";
-
-    const isFailed =
-      status === "FAILED" ||
-      status === "MISSED" ||
-      status === "NO_ANSWER" ||
-      status === "CANCELED" ||
-      status === "CANCELLED";
-
-    if (isEnded) {
+    if (isEndedLog(item)) {
       return {
         connStatus: "종료",
         sttStatus: "완료",
       };
     }
 
-    if (isFailed) {
+    if (isFailedLog(item)) {
       return {
         connStatus: "미응답",
         sttStatus: "중단",
       };
     }
 
-    if (isActive) {
+    if (isActiveLog(item)) {
+      const backendSttStatus = normalizeKoreanStatus(item.sttStatus);
+
       return {
         connStatus: "연결",
-        sttStatus: sttStatus === "COMPLETED" ? "완료" : "진행 중",
+        sttStatus:
+          backendSttStatus === "완료"
+            ? "완료"
+            : backendSttStatus === "진행중"
+            ? "진행 중"
+            : "진행 중",
       };
     }
 
     return {
-      connStatus: item.connectionStatus || "확인 필요",
-      sttStatus: item.sttStatus || "-",
+      connStatus: normalizeKoreanStatus(item.connectionStatus) || "확인 필요",
+      sttStatus: normalizeKoreanStatus(item.sttStatus) || "-",
+    };
+  };
+
+  const extractIntercomLogs = (responseData) => {
+    if (Array.isArray(responseData?.data)) {
+      return responseData.data;
+    }
+
+    if (Array.isArray(responseData)) {
+      return responseData;
+    }
+
+    if (Array.isArray(responseData?.content)) {
+      return responseData.content;
+    }
+
+    if (Array.isArray(responseData?.logs)) {
+      return responseData.logs;
+    }
+
+    if (Array.isArray(responseData?.items)) {
+      return responseData.items;
+    }
+
+    if (Array.isArray(responseData?.data?.content)) {
+      return responseData.data.content;
+    }
+
+    if (Array.isArray(responseData?.data?.logs)) {
+      return responseData.data.logs;
+    }
+
+    if (Array.isArray(responseData?.data?.items)) {
+      return responseData.data.items;
+    }
+
+    if (Array.isArray(responseData?.result)) {
+      return responseData.result;
+    }
+
+    if (Array.isArray(responseData?.data?.result)) {
+      return responseData.data.result;
+    }
+
+    return [];
+  };
+
+  const getLogId = (item = {}, index = 0) => {
+    return item.logId ?? item.id ?? item.intercomLogId ?? index;
+  };
+
+  const getSessionId = (item = {}) => {
+    return (
+      item.sessionId ??
+      item.callSessionId ??
+      item.intercomSessionId ??
+      item.session?.id ??
+      null
+    );
+  };
+
+  const getDeviceUid = (item = {}) => {
+    return (
+      item.deviceUid ||
+      item.deviceId ||
+      item.device?.deviceUid ||
+      item.device?.id ||
+      "알 수 없음"
+    );
+  };
+
+  const normalizeLogItem = (item = {}, index = 0) => {
+    const logId = getLogId(item, index);
+    const sessionId = getSessionId(item);
+
+    return {
+      ...item,
+      id: logId,
+      logId,
+      sessionId,
+      deviceUid: getDeviceUid(item),
+      createdAt: getLogDateValue(item),
+      raw: item,
     };
   };
 
   const sortLogs = (targetLogs) => {
-    return [...targetLogs].sort(
-      (a, b) => getSortTime(b.createdAt) - getSortTime(a.createdAt)
+    return [...targetLogs]
+      .map(normalizeLogItem)
+      .sort((a, b) => getSortTime(b) - getSortTime(a));
+  };
+
+  const fetchSearchLogs = async (token) => {
+    const searchResponse = await axios.get(
+      `${BASE_URL}/api/admin/intercom-logs/search`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        params: {
+          date: selectedDate,
+        },
+      }
     );
+
+    const rawLogs = extractIntercomLogs(searchResponse.data);
+
+    logAdminCallLog("날짜별 호출 로그 응답", {
+      success: searchResponse.data?.success,
+      rawCount: rawLogs.length,
+      selectedDate,
+    });
+
+    return rawLogs;
+  };
+
+  const fetchFallbackLogs = async (token) => {
+    const fallbackResponse = await axios.get(
+      `${BASE_URL}/api/admin/intercom-logs`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    const rawLogs = extractIntercomLogs(fallbackResponse.data);
+
+    logAdminCallLog("전체 호출 로그 응답", {
+      success: fallbackResponse.data?.success,
+      rawCount: rawLogs.length,
+    });
+
+    return rawLogs;
   };
 
   const fetchIntercomLogs = async () => {
     try {
-      setIsLoading(true);
+      if (isMountedRef.current) {
+        setIsLoading(true);
+      }
 
       const token = await AsyncStorage.getItem("adminToken");
 
       if (!token) {
+        logAdminCallLog("adminToken 없음 - 로그인 화면 이동");
         navigation.navigate("AdminLogin");
         return;
       }
 
-      try {
-        const searchResponse = await axios.get(
-          `${BASE_URL}/api/admin/intercom-logs/search`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-            params: {
-              date: selectedDate,
-            },
-          }
-        );
+      let rawLogs = [];
 
-        if (
-          searchResponse.data?.success &&
-          Array.isArray(searchResponse.data?.data)
-        ) {
-          setLogs(sortLogs(searchResponse.data.data));
-          return;
-        }
+      try {
+        rawLogs = await fetchSearchLogs(token);
       } catch (error) {
-        console.log("날짜별 호출 로그 조회 실패:", error?.message);
+        const serverError =
+          error.response?.data?.message ||
+          JSON.stringify(error.response?.data) ||
+          error.message;
+
+        logAdminCallLog("날짜별 호출 로그 조회 실패 - fallback 진행", serverError);
+        rawLogs = await fetchFallbackLogs(token);
       }
 
-      const fallbackResponse = await axios.get(
-        `${BASE_URL}/api/admin/intercom-logs`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+      const sortedLogs = sortLogs(rawLogs);
 
-      if (
-        fallbackResponse.data?.success &&
-        Array.isArray(fallbackResponse.data?.data)
-      ) {
-        setLogs(sortLogs(fallbackResponse.data.data));
-      } else {
-        setLogs([]);
+      if (isMountedRef.current) {
+        setLogs(sortedLogs);
       }
     } catch (error) {
-      console.error("호출 로그 조회 실패:", error?.message);
-      setLogs([]);
+      const serverError =
+        error.response?.data?.message ||
+        JSON.stringify(error.response?.data) ||
+        error.message;
+
+      logAdminCallLog("호출 로그 조회 실패", serverError);
+
+      if (isMountedRef.current) {
+        setLogs([]);
+      }
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (isFocused) {
@@ -276,19 +511,31 @@ export default function AdminCallLogScreen() {
 
   useEffect(() => {
     const filtered = logs.filter((log) => {
-      if (!log.createdAt) return false;
-
-      const logDate = getDateString(log.createdAt);
+      const logDate = getDateString(log);
 
       return logDate === selectedDate;
     });
 
     setFilteredLogs(filtered);
+
+    const statusSummary = filtered.reduce((acc, item) => {
+      const labels = getStatusLabels(item);
+      const key = `${labels.connStatus}/${labels.sttStatus}`;
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    logAdminCallLog("호출 로그 필터링", {
+      selectedDate,
+      total: logs.length,
+      filtered: filtered.length,
+      statusSummary,
+    });
   }, [logs, selectedDate]);
 
   const handlePressLog = (item) => {
     navigation.navigate("AdminHistoryDetail", {
-      logId: item.id,
+      logId: item.logId || item.id,
       sessionId: item.sessionId,
       item,
     });
@@ -354,7 +601,7 @@ export default function AdminCallLogScreen() {
 
                 return (
                   <TouchableOpacity
-                    key={item.id || idx}
+                    key={item.logId || item.id || idx}
                     activeOpacity={0.6}
                     onPress={() => handlePressLog(item)}
                   >
@@ -362,7 +609,7 @@ export default function AdminCallLogScreen() {
                       <RowText style={{ flex: 1.2 }}>{reverseNo}</RowText>
 
                       <RowText style={{ flex: 1.5 }}>
-                        {formatLogTime(item.createdAt)}
+                        {formatLogTime(item)}
                       </RowText>
 
                       <RowText style={{ flex: 2.8 }}>

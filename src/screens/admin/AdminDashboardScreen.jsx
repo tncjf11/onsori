@@ -125,7 +125,7 @@ export default function AdminDashboardScreen() {
               <SummaryItem>
                 <SummaryLabel>평균 응답시간</SummaryLabel>
                 {/* 🚀 명세서 필드명 매핑: averageResponseSeconds (초 단위 표기) */}
-                <SummaryValue>{dashboardData?.averageResponseSeconds?.toFixed(1) || "0.0"}초</SummaryValue>
+                <SummaryValue>{((dashboardData?.averageResponseSeconds || 0) / 1000).toFixed(1)}초</SummaryValue>
               </SummaryItem>
               <DividerVertical />
               <SummaryItem>

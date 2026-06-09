@@ -1,11 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, ScrollView, TouchableOpacity } from "react-native";
 import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
 import styled from "styled-components/native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import BASE_URL from "../../api/config";
 import RecentCallItem from "../../components/RecentCallItem";
@@ -25,24 +25,69 @@ export default function HistoryScreen() {
     if (!isoString) return null;
 
     try {
+      const stringValue = String(isoString).trim();
+
       const hasExplicitTimezone =
-        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
-        return new Date(isoString);
+        const date = new Date(stringValue);
+        return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const normalized = isoString.replace("T", " ");
+      const normalized = stringValue.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
         .split(":")
         .map((value) => Number(String(value).split(".")[0]));
 
+      if (!year || !month || !day) return null;
+
       return new Date(year, month - 1, day, hour, minute, second);
     } catch (error) {
       return null;
     }
+  };
+
+  const getLogDateValue = (log = {}) => {
+    return (
+      log.createdAt ||
+      log.startedAt ||
+      log.startTime ||
+      log.endedAt ||
+      log.endTime ||
+      log.closedAt ||
+      log.completedAt ||
+      log.finishedAt ||
+      log.updatedAt ||
+      log.timestamp ||
+      log.time ||
+      ""
+    );
+  };
+
+  const extractIntercomLogs = (responseData) => {
+    if (Array.isArray(responseData?.data)) return responseData.data;
+    if (Array.isArray(responseData)) return responseData;
+    if (Array.isArray(responseData?.content)) return responseData.content;
+    if (Array.isArray(responseData?.logs)) return responseData.logs;
+    if (Array.isArray(responseData?.items)) return responseData.items;
+    if (Array.isArray(responseData?.data?.content)) {
+      return responseData.data.content;
+    }
+    if (Array.isArray(responseData?.data?.logs)) {
+      return responseData.data.logs;
+    }
+    if (Array.isArray(responseData?.data?.items)) {
+      return responseData.data.items;
+    }
+    if (Array.isArray(responseData?.result)) return responseData.result;
+    if (Array.isArray(responseData?.data?.result)) {
+      return responseData.data.result;
+    }
+
+    return [];
   };
 
   const formatTimeGap = (isoString) => {
@@ -81,7 +126,8 @@ export default function HistoryScreen() {
   };
 
   const getLogTimeValue = (log) => {
-    const parsedDate = parseKstDate(log?.createdAt);
+    const parsedDate = parseKstDate(getLogDateValue(log));
+
     return parsedDate && !Number.isNaN(parsedDate.getTime())
       ? parsedDate.getTime()
       : 0;
@@ -107,34 +153,51 @@ export default function HistoryScreen() {
         },
       });
 
-      if (response.data?.success && Array.isArray(response.data?.data)) {
-        const rawLogs = response.data.data;
+      const rawLogs = extractIntercomLogs(response.data);
 
-        const mappedLogs = [...rawLogs]
-          .sort((a, b) => getLogTimeValue(b) - getLogTimeValue(a))
-          .map((log) => {
-            const refinedSummary =
-              log.summary && log.summary.trim() !== "내용 없음"
-                ? log.summary.trim()
-                : "인터폰 호출 알림";
+      console.log("[HISTORY] 호출 이력 원본 응답", {
+        success: response.data?.success,
+        rawCount: rawLogs.length,
+        raw: response.data,
+      });
 
-            return {
-              ...log,
-              id: log.id,
-              logId: log.id,
-              sessionId: log.sessionId,
-              title: refinedSummary,
-              time: formatTimeGap(log.createdAt),
-              type: log.intent === "DELIVERY" ? "message" : "bell",
-              tags: log.intent ? [log.intent] : ["방문"],
-              raw: log,
-            };
-          });
+      const mappedLogs = [...rawLogs]
+        .filter((log) => log)
+        .sort((a, b) => getLogTimeValue(b) - getLogTimeValue(a))
+        .map((log, index) => {
+          const refinedSummary =
+            log.summary && log.summary.trim() !== "내용 없음"
+              ? log.summary.trim()
+              : log.visitorText && log.visitorText.trim()
+              ? log.visitorText.trim()
+              : "인터폰 호출 알림";
 
-        setHistoryData(mappedLogs);
-      } else {
-        setHistoryData([]);
-      }
+          const logId = log.logId ?? log.id ?? log.intercomLogId ?? index;
+
+          const sessionId =
+            log.sessionId ??
+            log.callSessionId ??
+            log.intercomSessionId ??
+            log.session?.id ??
+            null;
+
+          const logTime = getLogDateValue(log);
+
+          return {
+            ...log,
+            id: logId,
+            logId,
+            sessionId,
+            title: refinedSummary,
+            time: formatTimeGap(logTime),
+            type: log.intent === "DELIVERY" ? "message" : "bell",
+            tags: log.intent ? [log.intent] : ["방문"],
+            createdAt: logTime,
+            raw: log,
+          };
+        });
+
+      setHistoryData(mappedLogs);
     } catch (error) {
       console.error("🚨 History fetch 에러:", error.message);
       setHistoryData([]);
@@ -206,8 +269,6 @@ export default function HistoryScreen() {
     </Container>
   );
 }
-
-/* ================= 스타일 ================= */
 
 const Container = styled(SafeAreaContainer)`
   flex: 1;

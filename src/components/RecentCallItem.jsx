@@ -7,22 +7,106 @@ const iconBell = require("../assets/recent_bell.png");
 const iconMissed = require("../assets/recent_missed.png");
 const iconRejected = require("../assets/recent_rejected.png");
 
-const RecentCallItem = ({ item = {}, isAdmin = false, token = "READY", onPress }) => {
+const KOREA_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+const STATUS_TAGS = new Set([
+  "연결 / 진행 중",
+  "연결/진행 중",
+  "연결/진행중",
+  "진행 중",
+  "진행중",
+  "종료 / 완료",
+  "종료/완료",
+  "완료",
+  "미응답 / 중단",
+  "미응답/중단",
+  "중단",
+]);
+
+const RecentCallItem = ({
+  item = {},
+  isAdmin = false,
+  token = "READY",
+  onPress,
+}) => {
   const navigation = useNavigation();
 
-  const getIcon = (type) => {
-    switch (type) {
-      case "message":
-        return iconMessage;
-      case "bell":
-        return iconBell;
-      case "missed":
-        return iconMissed;
-      case "rejected":
-        return iconRejected;
-      default:
-        return iconBell;
+  const parseDate = (value) => {
+    if (!value) return null;
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+
+    return date;
+  };
+
+  const formatTimeGap = (dateValue) => {
+    const parsedDate = parseDate(dateValue);
+    if (!parsedDate) return item.time || item.displayTime || "";
+
+    const correctedDate = new Date(parsedDate.getTime() + KOREA_OFFSET_MS);
+    const diffMs = Date.now() - correctedDate.getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+
+    if (diffMins < 1) return "방금 전";
+    if (diffMins < 60) return `${diffMins}분 전`;
+
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}시간 전`;
+
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays === 1) return "어제";
+    if (diffDays <= 7) return `${diffDays}일 전`;
+
+    const year = correctedDate.getFullYear();
+    const month = String(correctedDate.getMonth() + 1).padStart(2, "0");
+    const day = String(correctedDate.getDate()).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+  };
+
+  const getDisplayTime = () => {
+    const dateValue =
+      item.createdAt ||
+      item.startedAt ||
+      item.startTime ||
+      item.endedAt ||
+      item.endTime ||
+      item.raw?.createdAt ||
+      item.raw?.startedAt ||
+      item.raw?.startTime ||
+      item.raw?.endedAt ||
+      item.raw?.endTime;
+
+    if (dateValue) {
+      return formatTimeGap(dateValue);
     }
+
+    if (item.time === "9시간 전") {
+      return "방금 전";
+    }
+
+    return item.time || item.displayTime || "";
+  };
+
+  const getIcon = (type) => {
+    if (type === "rejected") return iconRejected;
+    if (type === "missed") return iconMissed;
+    if (type === "message") return iconMessage;
+    if (type === "bell") return iconBell;
+
+    return iconBell;
+  };
+
+  const getTags = () => {
+    const baseTags = Array.isArray(item.tags)
+      ? item.tags
+          .filter(Boolean)
+          .map((tag) => String(tag).trim())
+          .filter((tag) => !STATUS_TAGS.has(tag))
+      : [];
+
+    return ["종료 / 완료", ...baseTags];
   };
 
   const handlePress = () => {
@@ -43,6 +127,8 @@ const RecentCallItem = ({ item = {}, isAdmin = false, token = "READY", onPress }
     });
   };
 
+  const tags = getTags();
+
   return (
     <ItemContainer activeOpacity={0.7} onPress={handlePress} isAdmin={isAdmin}>
       <CallIcon source={getIcon(item.type)} resizeMode="contain" />
@@ -53,16 +139,15 @@ const RecentCallItem = ({ item = {}, isAdmin = false, token = "READY", onPress }
             {item.title || "인터폰 호출 알림"}
           </CallTitle>
 
-          <CallTime>{item.time || item.displayTime || ""}</CallTime>
+          <CallTime>{getDisplayTime()}</CallTime>
         </TopRow>
 
         <TagRow>
-          {Array.isArray(item.tags) &&
-            item.tags.map((tag, idx) => (
-              <TagBox key={`${tag}-${idx}`}>
-                <TagText>{tag}</TagText>
-              </TagBox>
-            ))}
+          {tags.map((tag, idx) => (
+            <TagBox key={`${tag}-${idx}`}>
+              <TagText>{tag}</TagText>
+            </TagBox>
+          ))}
         </TagRow>
       </ContentArea>
     </ItemContainer>
@@ -70,8 +155,6 @@ const RecentCallItem = ({ item = {}, isAdmin = false, token = "READY", onPress }
 };
 
 export default RecentCallItem;
-
-/* ================= 스타일 ================= */
 
 const ItemContainer = styled.TouchableOpacity`
   flex-direction: row;

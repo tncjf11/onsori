@@ -28,6 +28,32 @@ const sendActive = require("../../assets/send_active.png");
 const callEndIcon = require("../../assets/call_end.png");
 const callEndOverlayImg = require("../../assets/call_end_overlay.png");
 
+const DEFAULT_DEVICE_UID = "DEVICE-001";
+
+const CLOSED_SESSION_STATUSES = new Set([
+  "CLOSED",
+  "ENDED",
+  "COMPLETE",
+  "COMPLETED",
+  "FINISHED",
+  "SUCCESS",
+  "FAILED",
+  "MISSED",
+  "NO_ANSWER",
+  "CANCELED",
+  "CANCELLED",
+]);
+
+const ACTIVE_SESSION_STATUSES = new Set([
+  "OPEN",
+  "CALLING",
+  "TALKING",
+  "ONGOING",
+  "INCOMING",
+  "ACTIVE",
+  "CONNECTED",
+]);
+
 const logUserChat = (message, data) => {
   if (data !== undefined) {
     console.log(`[USER_CHAT] ${message}`, data);
@@ -45,8 +71,16 @@ export default function IntercomChatScreen() {
   const lastVisitorMessageKeyRef = useRef(null);
   const lastMessageSignatureRef = useRef(null);
   const isEndingRef = useRef(false);
+  const isMountedRef = useRef(true);
 
-  const { sessionId = null, token: routeToken = null } = route.params || {};
+  const {
+    sessionId: routeSessionId = null,
+    activeSessionId: routeActiveSessionId = null,
+    token: routeToken = null,
+    deviceUid: routeDeviceUid = null,
+  } = route.params || {};
+
+  const initialSessionId = routeSessionId || routeActiveSessionId || null;
 
   const [selectedTags, setSelectedTags] = useState([]);
   const [isOverlayVisible, setIsOverlayVisible] = useState(false);
@@ -54,13 +88,23 @@ export default function IntercomChatScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isEnding, setIsEnding] = useState(false);
 
-  const [currentSessionId, setCurrentSessionId] = useState(sessionId);
+  const [currentSessionId, setCurrentSessionId] = useState(initialSessionId);
   const [messages, setMessages] = useState([]);
   const [seconds, setSeconds] = useState(0);
   const [token, setToken] = useState(null);
   const [backendQuickReplies, setBackendQuickReplies] = useState([]);
 
   const tabs = ["인사", "질문", "대답", "요청", "행동"];
+
+  const getResolvedDeviceUid = async () => {
+    return (
+      routeDeviceUid ||
+      (await AsyncStorage.getItem("deviceUid")) ||
+      (await AsyncStorage.getItem("verifiedDeviceUid")) ||
+      (await AsyncStorage.getItem("intercomDeviceUid")) ||
+      DEFAULT_DEVICE_UID
+    );
+  };
 
   const getTimeString = () => {
     const now = new Date();
@@ -81,15 +125,17 @@ export default function IntercomChatScreen() {
     if (!isoString) return null;
 
     try {
+      const stringValue = String(isoString).trim();
+
       const hasExplicitTimezone =
-        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
-        const date = new Date(isoString);
+        const date = new Date(stringValue);
         return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const normalized = isoString.replace("T", " ");
+      const normalized = stringValue.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
@@ -115,6 +161,112 @@ export default function IntercomChatScreen() {
     const mm = String(date.getMinutes()).padStart(2, "0");
 
     return `${hh}:${mm}`;
+  };
+
+  const getSessionId = (session) => {
+    const safeSession = session || {};
+
+    return (
+      safeSession.sessionId ??
+      safeSession.id ??
+      safeSession.callSessionId ??
+      safeSession.intercomSessionId ??
+      null
+    );
+  };
+
+  const getSessionStatus = (session) => {
+    const safeSession = session || {};
+
+    return String(
+      safeSession.status ||
+        safeSession.sessionStatus ||
+        safeSession.callStatus ||
+        safeSession.state ||
+        ""
+    )
+      .trim()
+      .toUpperCase();
+  };
+
+  const hasEndedAt = (session) => {
+    const safeSession = session || {};
+
+    return Boolean(
+      safeSession.endedAt ||
+        safeSession.endTime ||
+        safeSession.closedAt ||
+        safeSession.completedAt ||
+        safeSession.finishedAt
+    );
+  };
+
+  const isClosedSession = (session) => {
+    if (!session) return true;
+
+    const status = getSessionStatus(session);
+
+    if (CLOSED_SESSION_STATUSES.has(status)) return true;
+    if (hasEndedAt(session)) return true;
+
+    return false;
+  };
+
+  const isActiveSession = (session) => {
+    if (!session) return false;
+
+    const status = getSessionStatus(session);
+
+    if (isClosedSession(session)) return false;
+    if (!getSessionId(session)) return false;
+    if (!status) return true;
+
+    return ACTIVE_SESSION_STATUSES.has(status);
+  };
+
+  const moveToIdleMainTab = async ({
+    screen = "홈",
+    endedSessionId = null,
+  } = {}) => {
+    await AsyncStorage.removeItem("callStartTime");
+
+    stopMessagePolling();
+
+    if (isMountedRef.current) {
+      setCurrentSessionId(null);
+      setSelectedTags([]);
+      setIsOverlayVisible(false);
+      setIsLoading(false);
+    }
+
+    const parentNav = navigation.getParent() || navigation;
+
+    parentNav.setParams?.({
+      intercomStatus: "idle",
+      activeSessionId: null,
+      sessionId: null,
+    });
+
+    logUserChat("idle 상태로 MainTab 이동", {
+      screen,
+      sessionId: endedSessionId,
+    });
+
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: "MainTab",
+          params: {
+            screen,
+            refresh: Date.now(),
+            intercomStatus: "idle",
+            activeSessionId: null,
+            sessionId: null,
+          },
+        },
+      ],
+    });
   };
 
   const getFilteredReplies = (tabName) => {
@@ -228,6 +380,19 @@ export default function IntercomChatScreen() {
     return "receive";
   };
 
+  const isHiddenMessageText = (text) => {
+    const safeText = String(text || "").trim();
+
+    return (
+      !safeText ||
+      safeText === "실시간 자막 변환 중..." ||
+      safeText === "실시간 자막 변환 중" ||
+      safeText === "실시간 자막 확인 중..." ||
+      safeText === "실시간 자막 확인 중" ||
+      safeText === "자막 내용 없음"
+    );
+  };
+
   const normalizeMessages = (rawMessages = []) => {
     if (!Array.isArray(rawMessages)) return [];
 
@@ -236,7 +401,7 @@ export default function IntercomChatScreen() {
     rawMessages.forEach((message, index) => {
       const text = String(getMessageText(message)).trim();
 
-      if (!text) return;
+      if (isHiddenMessageText(text)) return;
 
       const createdAt = message.createdAt || message.time || "";
       const type = getMessageType(message);
@@ -288,6 +453,50 @@ export default function IntercomChatScreen() {
     });
   };
 
+  const fetchCurrentSession = async (activeToken) => {
+    if (!activeToken) return null;
+
+    try {
+      const deviceUid = await getResolvedDeviceUid();
+
+      logUserChat("현재 세션 확인 요청", {
+        deviceUid,
+      });
+
+      const response = await axios.get(`${BASE_URL}/api/sessions/current`, {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+        },
+        params: {
+          deviceUid,
+        },
+      });
+
+      const sessionData = response.data?.success
+        ? response.data?.data || null
+        : null;
+
+      logUserChat("현재 세션 확인 응답", {
+        success: response.data?.success || false,
+        sessionId: getSessionId(sessionData),
+        status: getSessionStatus(sessionData),
+        ended: hasEndedAt(sessionData),
+        raw: sessionData,
+      });
+
+      return sessionData;
+    } catch (error) {
+      const serverError =
+        error.response?.data?.message ||
+        JSON.stringify(error.response?.data) ||
+        error.message;
+
+      logUserChat("현재 세션 확인 실패", serverError);
+
+      return null;
+    }
+  };
+
   const fetchSessionMessages = async ({
     targetSessionId,
     activeToken,
@@ -301,9 +510,7 @@ export default function IntercomChatScreen() {
       return;
     }
 
-    if (isEndingRef.current) {
-      return;
-    }
+    if (isEndingRef.current) return;
 
     try {
       const response = await axios.get(
@@ -349,11 +556,15 @@ export default function IntercomChatScreen() {
         }
 
         logMessageUpdateIfChanged(targetSessionId, nextMessages);
-        setMessages(nextMessages);
+
+        if (isMountedRef.current) {
+          setMessages(nextMessages);
+        }
       } else {
         logUserChat("메시지 조회 응답 확인 필요", response.data);
       }
     } catch (error) {
+      const serverStatus = error.response?.status;
       const serverError =
         error.response?.data?.message ||
         JSON.stringify(error.response?.data) ||
@@ -361,8 +572,26 @@ export default function IntercomChatScreen() {
 
       logUserChat("세션 메시지 조회 실패", {
         sessionId: targetSessionId,
+        status: serverStatus,
         error: serverError,
       });
+
+      if (serverStatus === 404 || serverStatus === 410) {
+        stopMessagePolling();
+
+        if (!isEndingRef.current) {
+          Alert.alert("안내", "종료된 통화입니다.", [
+            {
+              text: "확인",
+              onPress: () =>
+                moveToIdleMainTab({
+                  screen: "히스토리",
+                  endedSessionId: targetSessionId,
+                }),
+            },
+          ]);
+        }
+      }
     }
   };
 
@@ -370,6 +599,10 @@ export default function IntercomChatScreen() {
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
+    }
+
+    if (!targetSessionId || !activeToken) {
+      return;
     }
 
     lastMessageSignatureRef.current = null;
@@ -404,8 +637,29 @@ export default function IntercomChatScreen() {
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (routeDeviceUid) {
+      AsyncStorage.setItem("deviceUid", String(routeDeviceUid)).catch(
+        (error) => {
+          logUserChat("route deviceUid 저장 실패", error?.message);
+        }
+      );
+    }
+  }, [routeDeviceUid]);
+
+  useEffect(() => {
     logUserChat("화면 진입", {
-      routeSessionId: sessionId,
+      routeSessionId,
+      routeActiveSessionId,
+      initialSessionId,
+      routeDeviceUid,
       hasRouteToken: Boolean(routeToken),
     });
 
@@ -415,7 +669,10 @@ export default function IntercomChatScreen() {
 
         if (startTime) {
           const elapsed = Math.floor((Date.now() - Number(startTime)) / 1000);
-          setSeconds(elapsed >= 0 ? elapsed : 0);
+
+          if (isMountedRef.current) {
+            setSeconds(elapsed >= 0 ? elapsed : 0);
+          }
 
           logUserChat("타이머 복구", {
             elapsedSeconds: elapsed >= 0 ? elapsed : 0,
@@ -432,7 +689,9 @@ export default function IntercomChatScreen() {
     restoreTimer();
 
     const timer = setInterval(() => {
-      setSeconds((prev) => prev + 1);
+      if (isMountedRef.current && !isEndingRef.current) {
+        setSeconds((prev) => prev + 1);
+      }
     }, 1000);
 
     return () => clearInterval(timer);
@@ -455,7 +714,7 @@ export default function IntercomChatScreen() {
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
+    let isCancelled = false;
 
     const initializeChatRoom = async () => {
       try {
@@ -468,17 +727,22 @@ export default function IntercomChatScreen() {
         logUserChat("초기화 시작", {
           hasSavedToken: Boolean(savedToken),
           hasRouteToken: Boolean(routeToken),
-          activeSessionId: sessionId,
+          activeSessionId: initialSessionId,
         });
 
-        if (isMounted) {
+        if (!isCancelled && isMountedRef.current) {
           setToken(activeToken);
         }
 
         try {
           const repliesRes = await axios.get(`${BASE_URL}/api/quick-replies`);
 
-          if (repliesRes.data?.success && repliesRes.data?.data && isMounted) {
+          if (
+            repliesRes.data?.success &&
+            repliesRes.data?.data &&
+            !isCancelled &&
+            isMountedRef.current
+          ) {
             setBackendQuickReplies(repliesRes.data.data);
 
             logUserChat("빠른 응답 목록 조회 완료", {
@@ -491,86 +755,71 @@ export default function IntercomChatScreen() {
 
         if (!activeToken) {
           logUserChat("초기화 중단 - accessToken 없음");
-          Alert.alert("오류", "로그인이 필요합니다.");
+
+          Alert.alert("오류", "로그인이 필요합니다.", [
+            {
+              text: "확인",
+              onPress: () => moveToIdleMainTab({ screen: "홈" }),
+            },
+          ]);
+
           return;
         }
 
-        if (sessionId) {
-          if (isMounted) {
-            setCurrentSessionId(sessionId);
-            setMessages([]);
-          }
+        if (!initialSessionId) {
+          logUserChat("초기화 중단 - sessionId 없음, 새 세션 자동 생성 차단");
 
-          logUserChat("기존 세션 사용", {
-            sessionId,
+          Alert.alert("안내", "현재 연결된 인터폰 통화가 없습니다.", [
+            {
+              text: "확인",
+              onPress: () => moveToIdleMainTab({ screen: "홈" }),
+            },
+          ]);
+
+          return;
+        }
+
+        const currentSession = await fetchCurrentSession(activeToken);
+        const currentOpenSessionId = getSessionId(currentSession);
+
+        if (
+          !currentSession ||
+          isClosedSession(currentSession) ||
+          !isActiveSession(currentSession) ||
+          String(currentOpenSessionId) !== String(initialSessionId)
+        ) {
+          logUserChat("초기화 중단 - 현재 활성 세션 아님", {
+            routeSessionId: initialSessionId,
+            currentSessionId: currentOpenSessionId,
+            currentStatus: getSessionStatus(currentSession),
+            hasEndedAt: hasEndedAt(currentSession),
           });
 
-          startMessagePolling(sessionId, activeToken);
+          Alert.alert("안내", "이미 종료된 통화입니다.", [
+            {
+              text: "확인",
+              onPress: () =>
+                moveToIdleMainTab({
+                  screen: "히스토리",
+                  endedSessionId: initialSessionId,
+                }),
+            },
+          ]);
+
           return;
         }
 
-        logUserChat("새 세션 시작 요청", {
-          deviceUid: "DEVICE-001",
+        if (!isCancelled && isMountedRef.current) {
+          setCurrentSessionId(initialSessionId);
+          setMessages([]);
+        }
+
+        logUserChat("기존 활성 세션 사용", {
+          sessionId: initialSessionId,
+          status: getSessionStatus(currentSession),
         });
 
-        const response = await axios.post(
-          `${BASE_URL}/api/sessions/start`,
-          {
-            deviceUid: "DEVICE-001",
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${activeToken}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        if (response.data?.success && response.data?.data) {
-          const serverSessionId = response.data.data.sessionId;
-
-          logUserChat("새 세션 생성 완료", {
-            sessionId: serverSessionId,
-            response: response.data.data,
-          });
-
-          if (isMounted) {
-            setCurrentSessionId(serverSessionId);
-            setMessages([]);
-          }
-
-          try {
-            await axios.post(
-              `${BASE_URL}/api/sessions/${serverSessionId}/connect`,
-              {},
-              {
-                headers: {
-                  Authorization: `Bearer ${activeToken}`,
-                  "Content-Type": "application/json",
-                },
-              }
-            );
-
-            logUserChat("세션 connect 완료", {
-              sessionId: serverSessionId,
-            });
-          } catch (error) {
-            const serverError =
-              error.response?.data?.message ||
-              JSON.stringify(error.response?.data) ||
-              error.message;
-
-            logUserChat("세션 connect 실패", {
-              sessionId: serverSessionId,
-              error: serverError,
-            });
-          }
-
-          startMessagePolling(serverSessionId, activeToken);
-        } else {
-          logUserChat("세션 시작 실패 응답", response.data);
-          Alert.alert("오류", "인터폰 세션을 시작하지 못했습니다.");
-        }
+        startMessagePolling(initialSessionId, activeToken);
       } catch (error) {
         const serverError =
           error.response?.data?.message ||
@@ -578,9 +827,15 @@ export default function IntercomChatScreen() {
           error.message;
 
         logUserChat("채팅방 초기화 실패", serverError);
-        Alert.alert("오류", "인터폰 세션 정보를 불러오지 못했습니다.");
+
+        Alert.alert("오류", "인터폰 세션 정보를 불러오지 못했습니다.", [
+          {
+            text: "확인",
+            onPress: () => moveToIdleMainTab({ screen: "홈" }),
+          },
+        ]);
       } finally {
-        if (isMounted) {
+        if (!isCancelled && isMountedRef.current) {
           setIsLoading(false);
         }
       }
@@ -589,43 +844,16 @@ export default function IntercomChatScreen() {
     initializeChatRoom();
 
     return () => {
-      isMounted = false;
+      isCancelled = true;
       stopMessagePolling();
       logUserChat("화면 이탈 - polling 정리");
     };
-  }, [sessionId]);
+  }, [initialSessionId]);
 
   const moveToHistoryAfterEnd = async (endedSessionId) => {
-    await AsyncStorage.removeItem("callStartTime");
-
-    setCurrentSessionId(null);
-    setSelectedTags([]);
-    setIsOverlayVisible(false);
-
-    const parentNav = navigation.getParent() || navigation;
-
-    parentNav.setParams?.({
-      intercomStatus: "idle",
-      activeSessionId: null,
-    });
-
-    logUserChat("통화 종료 후 히스토리 이동", {
-      sessionId: endedSessionId,
-    });
-
-    navigation.reset({
-      index: 0,
-      routes: [
-        {
-          name: "MainTab",
-          params: {
-            screen: "히스토리",
-            refresh: Date.now(),
-            intercomStatus: "idle",
-            activeSessionId: null,
-          },
-        },
-      ],
+    await moveToIdleMainTab({
+      screen: "히스토리",
+      endedSessionId,
     });
   };
 
@@ -640,7 +868,7 @@ export default function IntercomChatScreen() {
     setIsOverlayVisible(false);
     stopMessagePolling();
 
-    const activeSessionId = currentSessionId || sessionId;
+    const activeSessionId = currentSessionId || initialSessionId;
     const activeToken = token || (await AsyncStorage.getItem("accessToken"));
 
     if (!activeSessionId) {
@@ -655,10 +883,10 @@ export default function IntercomChatScreen() {
         },
       ]);
 
-      isEndingRef.current = false;
-      setIsEnding(false);
       return;
     }
+
+    let isEndSuccess = false;
 
     try {
       logUserChat("세션 종료 요청", {
@@ -679,10 +907,14 @@ export default function IntercomChatScreen() {
         }
       );
 
+      isEndSuccess = response.data?.success !== false;
+
       logUserChat("세션 종료 응답", {
         sessionId: activeSessionId,
         status: response.status,
         data: response.data,
+        success: response.data?.success,
+        endedAt: response.data?.data?.endedAt || null,
       });
     } catch (error) {
       const serverError =
@@ -695,7 +927,20 @@ export default function IntercomChatScreen() {
         error: serverError,
       });
     } finally {
-      await moveToHistoryAfterEnd(activeSessionId);
+      if (isEndSuccess) {
+        await moveToHistoryAfterEnd(activeSessionId);
+      } else {
+        isEndingRef.current = false;
+
+        if (isMountedRef.current) {
+          setIsEnding(false);
+        }
+
+        Alert.alert(
+          "종료 실패",
+          "통화 종료 처리에 실패했습니다. 잠시 후 다시 시도해 주세요."
+        );
+      }
     }
   };
 
@@ -790,6 +1035,7 @@ export default function IntercomChatScreen() {
         shouldVibrate: false,
       });
     } catch (error) {
+      const serverStatus = error.response?.status;
       const serverError =
         error.response?.data?.message ||
         JSON.stringify(error.response?.data) ||
@@ -797,8 +1043,24 @@ export default function IntercomChatScreen() {
 
       logUserChat("빠른 응답 전송 실패", {
         sessionId: targetSessionId,
+        status: serverStatus,
         error: serverError,
       });
+
+      if (serverStatus === 404 || serverStatus === 409 || serverStatus === 410) {
+        Alert.alert("안내", "종료된 통화에는 응답을 보낼 수 없습니다.", [
+          {
+            text: "확인",
+            onPress: () =>
+              moveToIdleMainTab({
+                screen: "히스토리",
+                endedSessionId: targetSessionId,
+              }),
+          },
+        ]);
+
+        return;
+      }
 
       Alert.alert("전송 실패", "빠른 응답을 전송하지 못했습니다.");
     }
@@ -897,7 +1159,10 @@ export default function IntercomChatScreen() {
               <SelectedTag key={`${item.replyCode}-${index}`}>
                 <TagText>{item.text}</TagText>
 
-                <TouchableOpacity onPress={() => removeTag(index)}>
+                <TouchableOpacity
+                  onPress={() => removeTag(index)}
+                  disabled={isEnding}
+                >
                   <Ionicons name="close-circle" size={16} color="#FF4D4D" />
                 </TouchableOpacity>
               </SelectedTag>
@@ -923,6 +1188,7 @@ export default function IntercomChatScreen() {
                 if (isEndingRef.current) return;
                 setActiveTab(tab);
               }}
+              disabled={isEnding}
             >
               <TabText isActive={activeTab === tab}>{tab}</TabText>
             </TabButton>
@@ -959,6 +1225,7 @@ export default function IntercomChatScreen() {
                   if (isEndingRef.current) return;
                   confirmEndCall();
                 }}
+                disabled={isEnding}
               />
 
               <TransparentTouchArea
@@ -968,6 +1235,7 @@ export default function IntercomChatScreen() {
                   logUserChat("종료 모달 취소");
                   setIsOverlayVisible(false);
                 }}
+                disabled={isEnding}
               />
             </TransparentButtonRow>
           </OverlayImageCard>

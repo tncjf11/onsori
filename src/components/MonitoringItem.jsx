@@ -1,71 +1,136 @@
 import React from "react";
 import styled from "styled-components/native";
 
+const ACTIVE_SESSION_STATUSES = new Set([
+  "OPEN",
+  "CALLING",
+  "TALKING",
+  "ONGOING",
+  "ACTIVE",
+  "CONNECTED",
+  "INCOMING",
+]);
+
+const ENDED_SESSION_STATUSES = new Set([
+  "CLOSED",
+  "ENDED",
+  "COMPLETE",
+  "COMPLETED",
+  "FINISHED",
+  "SUCCESS",
+]);
+
+const FAILED_SESSION_STATUSES = new Set([
+  "FAILED",
+  "MISSED",
+  "NO_ANSWER",
+  "CANCELED",
+  "CANCELLED",
+]);
+
 const MonitoringItem = ({ item = {} }) => {
   const normalizeStatus = (statusValue) => {
-    return String(statusValue || "").toUpperCase();
+    return String(statusValue || "")
+      .trim()
+      .toUpperCase();
   };
 
-  const getStatusType = (statusValue) => {
-    const status = normalizeStatus(statusValue);
+  const getRawStatus = () => {
+    return normalizeStatus(
+      item.status ||
+        item.sessionStatus ||
+        item.callStatus ||
+        item.state ||
+        item.connectionState ||
+        ""
+    );
+  };
 
-    if (
-      status === "OPEN" ||
-      status === "CALLING" ||
-      status === "TALKING" ||
-      status === "ONGOING" ||
-      status === "ACTIVE"
-    ) {
-      return "ACTIVE";
-    }
+  const hasEndedTime = () => {
+    return Boolean(
+      item.endedAt ||
+        item.endTime ||
+        item.closedAt ||
+        item.completedAt ||
+        item.finishedAt
+    );
+  };
 
-    if (
-      status === "CLOSED" ||
-      status === "ENDED" ||
-      status === "COMPLETE" ||
-      status === "COMPLETED" ||
-      status === "FINISHED"
-    ) {
+  const getStatusType = () => {
+    const status = getRawStatus();
+
+    if (hasEndedTime()) {
       return "ENDED";
     }
 
-    if (
-      status === "FAILED" ||
-      status === "MISSED" ||
-      status === "NO_ANSWER"
-    ) {
+    if (ENDED_SESSION_STATUSES.has(status)) {
+      return "ENDED";
+    }
+
+    if (FAILED_SESSION_STATUSES.has(status)) {
       return "FAILED";
+    }
+
+    if (ACTIVE_SESSION_STATUSES.has(status)) {
+      return "ACTIVE";
     }
 
     return "UNKNOWN";
   };
 
-  const getStatusColor = (statusValue) => {
-    const status = getStatusType(statusValue);
+  const getStatusColor = () => {
+    const statusType = getStatusType();
 
-    if (status === "ACTIVE") return "#06F393";
-    if (status === "ENDED") return "#999";
-    if (status === "FAILED") return "#FF5C5C";
+    if (statusType === "ACTIVE") return "#06F393";
+    if (statusType === "ENDED") return "#999";
+    if (statusType === "FAILED") return "#FF5C5C";
 
     return "#999";
   };
 
-  const getCallStatusText = (statusValue) => {
-    const status = getStatusType(statusValue);
+  const normalizeKoreanStatus = (value) => {
+    return String(value || "").trim();
+  };
 
-    if (status === "ACTIVE") return "연결";
-    if (status === "ENDED") return "종료";
-    if (status === "FAILED") return "미응답";
+  const getCallStatusText = () => {
+    const backendConnectionStatus = normalizeKoreanStatus(
+      item.connectionStatus
+    );
+
+    if (
+      backendConnectionStatus === "연결" ||
+      backendConnectionStatus === "종료" ||
+      backendConnectionStatus === "미응답"
+    ) {
+      return backendConnectionStatus;
+    }
+
+    const statusType = getStatusType();
+
+    if (statusType === "ACTIVE") return "연결";
+    if (statusType === "ENDED") return "종료";
+    if (statusType === "FAILED") return "미응답";
 
     return "확인 필요";
   };
 
-  const getSttStatusText = (statusValue) => {
-    const status = getStatusType(statusValue);
+  const getSttStatusText = () => {
+    const backendSttStatus = normalizeKoreanStatus(item.sttStatus);
 
-    if (status === "ACTIVE") return "진행 중";
-    if (status === "ENDED") return "완료";
-    if (status === "FAILED") return "중단";
+    if (
+      backendSttStatus === "진행 중" ||
+      backendSttStatus === "진행중" ||
+      backendSttStatus === "완료" ||
+      backendSttStatus === "중단"
+    ) {
+      return backendSttStatus === "진행중" ? "진행 중" : backendSttStatus;
+    }
+
+    const statusType = getStatusType();
+
+    if (statusType === "ACTIVE") return "진행 중";
+    if (statusType === "ENDED") return "완료";
+    if (statusType === "FAILED") return "중단";
 
     return "확인 필요";
   };
@@ -74,15 +139,17 @@ const MonitoringItem = ({ item = {} }) => {
     if (!isoString) return null;
 
     try {
+      const stringValue = String(isoString).trim();
+
       const hasExplicitTimezone =
-        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
-        const date = new Date(isoString);
+        const date = new Date(stringValue);
         return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const normalized = isoString.replace("T", " ");
+      const normalized = stringValue.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
@@ -95,6 +162,17 @@ const MonitoringItem = ({ item = {} }) => {
     } catch {
       return null;
     }
+  };
+
+  const getStartedAt = () => {
+    return (
+      item.startedAt ||
+      item.startTime ||
+      item.createdAt ||
+      item.requestedAt ||
+      item.timestamp ||
+      ""
+    );
   };
 
   const formatTime = (dateValue) => {
@@ -111,32 +189,29 @@ const MonitoringItem = ({ item = {} }) => {
     return `${hh}:${min}`;
   };
 
-  const statusColor = getStatusColor(item.status || item.sessionStatus);
+  const statusColor = getStatusColor();
 
   const title =
     item.title ||
     item.deviceUid ||
+    item.deviceId ||
     `세션 ID: ${item.sessionId || item.id || "-"}`;
 
   return (
     <ItemContainer>
       <TopRow>
         <UserId numberOfLines={1}>{title}</UserId>
-        <Duration>{formatTime(item.startedAt || item.createdAt)}</Duration>
+        <Duration>{formatTime(getStartedAt())}</Duration>
       </TopRow>
 
       <Divider />
 
       <BottomRow>
         <SttBadge bgColor={statusColor}>
-          <SttText>
-            STT: {getSttStatusText(item.status || item.sessionStatus)}
-          </SttText>
+          <SttText>STT: {getSttStatusText()}</SttText>
         </SttBadge>
 
-        <CallStatus color={statusColor}>
-          {getCallStatusText(item.status || item.sessionStatus)}
-        </CallStatus>
+        <CallStatus color={statusColor}>{getCallStatusText()}</CallStatus>
       </BottomRow>
     </ItemContainer>
   );

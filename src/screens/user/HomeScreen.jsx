@@ -10,7 +10,7 @@ import {
 import styled from "styled-components/native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
-import { useNavigation, useIsFocused } from "@react-navigation/native";
+import { useNavigation, useIsFocused, useRoute } from "@react-navigation/native";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -18,6 +18,32 @@ import BASE_URL from "../../api/config";
 import RecentCallItem from "../../components/RecentCallItem";
 
 const bellIcon = require("../../assets/bell.png");
+
+const DEFAULT_DEVICE_UID = "DEVICE-001";
+
+const CLOSED_SESSION_STATUSES = new Set([
+  "CLOSED",
+  "ENDED",
+  "COMPLETE",
+  "COMPLETED",
+  "FINISHED",
+  "SUCCESS",
+  "FAILED",
+  "MISSED",
+  "NO_ANSWER",
+  "CANCELED",
+  "CANCELLED",
+]);
+
+const ACTIVE_SESSION_STATUSES = new Set([
+  "OPEN",
+  "CALLING",
+  "TALKING",
+  "ONGOING",
+  "INCOMING",
+  "ACTIVE",
+  "CONNECTED",
+]);
 
 const logHome = (message, data) => {
   if (data !== undefined) {
@@ -29,6 +55,7 @@ const logHome = (message, data) => {
 
 export default function HomeScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
   const isFocused = useIsFocused();
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -41,6 +68,11 @@ export default function HomeScreen() {
   const intercomStatusRef = useRef("idle");
   const activeSessionIdRef = useRef(null);
   const lastHomeStatusLogRef = useRef("");
+  const isMountedRef = useRef(true);
+
+  const getDeviceUid = async () => {
+    return (await AsyncStorage.getItem("deviceUid")) || DEFAULT_DEVICE_UID;
+  };
 
   const syncNavigationParams = (nextStatus, nextSessionId) => {
     const safeSessionId = nextSessionId || null;
@@ -48,13 +80,13 @@ export default function HomeScreen() {
     navigation.setParams?.({
       intercomStatus: nextStatus,
       activeSessionId: safeSessionId,
+      sessionId: safeSessionId,
     });
 
-    const parentNavigation = navigation.getParent?.();
-
-    parentNavigation?.setParams?.({
+    navigation.getParent?.()?.setParams?.({
       intercomStatus: nextStatus,
       activeSessionId: safeSessionId,
+      sessionId: safeSessionId,
     });
   };
 
@@ -63,44 +95,116 @@ export default function HomeScreen() {
     reason = "",
     nextSessionId = activeSessionIdRef.current
   ) => {
+    const safeStatus = nextStatus || "idle";
     const safeSessionId = nextSessionId || null;
     const prevStatus = intercomStatusRef.current;
+    const prevSessionId = activeSessionIdRef.current;
 
-    intercomStatusRef.current = nextStatus;
+    intercomStatusRef.current = safeStatus;
     activeSessionIdRef.current = safeSessionId;
 
-    setIntercomStatus(nextStatus);
-    setActiveSessionId(safeSessionId);
+    if (isMountedRef.current) {
+      setIntercomStatus(safeStatus);
+      setActiveSessionId(safeSessionId);
+    }
 
-    syncNavigationParams(nextStatus, safeSessionId);
+    syncNavigationParams(safeStatus, safeSessionId);
 
-    const logKey = `${prevStatus}->${nextStatus}:${safeSessionId}:${reason}`;
+    const logKey = `${prevStatus}->${safeStatus}:${prevSessionId}->${safeSessionId}:${reason}`;
 
     if (lastHomeStatusLogRef.current !== logKey) {
       lastHomeStatusLogRef.current = logKey;
 
       logHome("인터폰 상태 동기화", {
         previous: prevStatus,
-        next: nextStatus,
+        next: safeStatus,
+        previousSessionId: prevSessionId,
         activeSessionId: safeSessionId,
         reason,
       });
     }
   };
 
+  const normalizeStatus = (value) => {
+    return String(value || "")
+      .trim()
+      .toUpperCase();
+  };
+
+  const getSessionStatus = (session) => {
+    const safeSession = session || {};
+
+    return normalizeStatus(
+      safeSession.status ||
+        safeSession.sessionStatus ||
+        safeSession.callStatus ||
+        safeSession.state ||
+        ""
+    );
+  };
+
+  const getSessionId = (session) => {
+    const safeSession = session || {};
+
+    return (
+      safeSession.sessionId ??
+      safeSession.id ??
+      safeSession.callSessionId ??
+      safeSession.intercomSessionId ??
+      null
+    );
+  };
+
+  const hasEndedTime = (session) => {
+    const safeSession = session || {};
+
+    return Boolean(
+      safeSession.endedAt ||
+        safeSession.endTime ||
+        safeSession.closedAt ||
+        safeSession.completedAt ||
+        safeSession.finishedAt
+    );
+  };
+
+  const isEndedSession = (session) => {
+    if (!session) return true;
+
+    const status = getSessionStatus(session);
+
+    if (hasEndedTime(session)) return true;
+    if (CLOSED_SESSION_STATUSES.has(status)) return true;
+
+    return false;
+  };
+
+  const isActiveSession = (session) => {
+    if (!session) return false;
+    if (isEndedSession(session)) return false;
+
+    const sessionId = getSessionId(session);
+    const status = getSessionStatus(session);
+
+    if (!sessionId) return false;
+    if (!status) return true;
+
+    return ACTIVE_SESSION_STATUSES.has(status);
+  };
+
   const parseServerDate = (isoString) => {
     if (!isoString) return null;
 
     try {
+      const stringValue = String(isoString).trim();
       const hasExplicitTimezone =
-        isoString.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoString);
+        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
-        const date = new Date(isoString);
+        const date = new Date(stringValue);
         return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const normalized = isoString.replace("T", " ");
+      const normalized = stringValue.replace("T", " ");
       const [datePart, timePart = "00:00:00"] = normalized.split(" ");
       const [year, month, day] = datePart.split("-").map(Number);
       const [hour = 0, minute = 0, second = 0] = timePart
@@ -119,8 +223,13 @@ export default function HomeScreen() {
     return (
       log.createdAt ||
       log.startedAt ||
+      log.startTime ||
       log.endedAt ||
       log.endTime ||
+      log.closedAt ||
+      log.completedAt ||
+      log.finishedAt ||
+      log.updatedAt ||
       log.timestamp ||
       log.time ||
       ""
@@ -151,6 +260,7 @@ export default function HomeScreen() {
       const diffMs = now.getTime() - logTime.getTime();
       const diffMins = Math.floor(diffMs / (1000 * 60));
 
+      if (diffMins < 0) return "방금 전";
       if (diffMins < 1) return "방금 전";
       if (diffMins < 60) return `${diffMins}분 전`;
 
@@ -172,107 +282,22 @@ export default function HomeScreen() {
     }
   };
 
-  const normalizeStatus = (value) => {
-    return String(value || "").toUpperCase();
-  };
-
-  const getSessionStatus = (session) => {
-    const safeSession = session || {};
-
-    return normalizeStatus(
-      safeSession.status ||
-        safeSession.sessionStatus ||
-        safeSession.callStatus ||
-        safeSession.state ||
-        ""
-    );
-  };
-
-  const getSessionId = (session) => {
-    const safeSession = session || {};
-
-    return (
-      safeSession.sessionId ??
-      safeSession.id ??
-      safeSession.callSessionId ??
-      null
-    );
-  };
-
-  const hasEndedTime = (session) => {
-    const safeSession = session || {};
-
-    return Boolean(
-      safeSession.endedAt || safeSession.endTime || safeSession.closedAt
-    );
-  };
-
-  const isEndedSession = (session) => {
-    if (!session) return false;
-
-    const status = getSessionStatus(session);
-
-    return (
-      hasEndedTime(session) ||
-      status === "CLOSED" ||
-      status === "ENDED" ||
-      status === "COMPLETE" ||
-      status === "COMPLETED" ||
-      status === "FINISHED" ||
-      status === "SUCCESS" ||
-      status === "FAILED" ||
-      status === "MISSED" ||
-      status === "NO_ANSWER" ||
-      status === "CANCELED" ||
-      status === "CANCELLED"
-    );
-  };
-
-  const isActiveSession = (session) => {
-    if (!session) return false;
-    if (isEndedSession(session)) return false;
-
-    const status = getSessionStatus(session);
-
-    return (
-      status === "OPEN" ||
-      status === "CALLING" ||
-      status === "TALKING" ||
-      status === "ONGOING" ||
-      status === "INCOMING" ||
-      status === "ACTIVE"
-    );
-  };
-
   const extractIntercomLogs = (responseData) => {
-    if (Array.isArray(responseData?.data)) {
-      return responseData.data;
-    }
-
-    if (Array.isArray(responseData)) {
-      return responseData;
-    }
-
-    if (Array.isArray(responseData?.content)) {
-      return responseData.content;
-    }
-
-    if (Array.isArray(responseData?.logs)) {
-      return responseData.logs;
-    }
-
+    if (Array.isArray(responseData?.data)) return responseData.data;
+    if (Array.isArray(responseData)) return responseData;
+    if (Array.isArray(responseData?.content)) return responseData.content;
+    if (Array.isArray(responseData?.logs)) return responseData.logs;
+    if (Array.isArray(responseData?.items)) return responseData.items;
     if (Array.isArray(responseData?.data?.content)) {
       return responseData.data.content;
     }
-
     if (Array.isArray(responseData?.data?.logs)) {
       return responseData.data.logs;
     }
-
-    if (Array.isArray(responseData?.result)) {
-      return responseData.result;
+    if (Array.isArray(responseData?.data?.items)) {
+      return responseData.data.items;
     }
-
+    if (Array.isArray(responseData?.result)) return responseData.result;
     if (Array.isArray(responseData?.data?.result)) {
       return responseData.data.result;
     }
@@ -285,19 +310,32 @@ export default function HomeScreen() {
     const visitorText = String(log.visitorText || "").trim();
     const content = String(log.content || "").trim();
     const message = String(log.message || "").trim();
+    const transcript = String(log.transcript || "").trim();
 
     if (summary && summary !== "내용 없음") return summary;
     if (visitorText) return visitorText;
     if (content) return content;
     if (message) return message;
+    if (transcript) return transcript;
 
     return "인터폰 호출 알림";
   };
 
+  const getLogIntent = (log = {}) => {
+    return String(log.intent || log.category || "").trim();
+  };
+
   const mapRecentLogItem = (log = {}, index = 0) => {
     const logId = log.logId ?? log.id ?? log.intercomLogId ?? index;
-    const sessionId = log.sessionId ?? log.callSessionId ?? null;
+    const sessionId =
+      log.sessionId ??
+      log.callSessionId ??
+      log.intercomSessionId ??
+      log.session?.id ??
+      null;
+
     const createdAt = getLogDateValue(log);
+    const intent = getLogIntent(log);
 
     return {
       ...log,
@@ -306,9 +344,9 @@ export default function HomeScreen() {
       sessionId,
       title: getLogTitle(log),
       time: formatTimeGap(createdAt),
-      type: log.intent === "DELIVERY" ? "message" : "bell",
-      tags: log.intent ? [log.intent] : ["방문"],
-      deviceUid: log.deviceUid,
+      type: intent === "DELIVERY" ? "message" : "bell",
+      tags: intent ? [intent] : ["방문"],
+      deviceUid: log.deviceUid || log.deviceId || log.device?.deviceUid,
       createdAt,
       raw: log,
     };
@@ -338,7 +376,10 @@ export default function HomeScreen() {
 
   const fetchRecentLogs = async (savedToken) => {
     if (!savedToken) {
-      setRecentCalls([]);
+      if (isMountedRef.current) {
+        setRecentCalls([]);
+      }
+
       logHome("최근 호출 이력 조회 생략 - accessToken 없음");
       return;
     }
@@ -364,7 +405,9 @@ export default function HomeScreen() {
         .slice(0, 4)
         .map(mapRecentLogItem);
 
-      setRecentCalls(mappedLogs);
+      if (isMountedRef.current) {
+        setRecentCalls(mappedLogs);
+      }
 
       logHome("최근 호출 이력 조회 완료", {
         total: rawLogs.length,
@@ -377,23 +420,54 @@ export default function HomeScreen() {
         error.message;
 
       logHome("최근 호출 이력 조회 실패", serverError);
-      setRecentCalls([]);
+
+      if (isMountedRef.current) {
+        setRecentCalls([]);
+      }
     }
+  };
+
+  const resolveCurrentSessionData = (responseData) => {
+    if (!responseData) return null;
+
+    if (Object.prototype.hasOwnProperty.call(responseData, "data")) {
+      return responseData.data || null;
+    }
+
+    return responseData;
+  };
+
+  const requestCurrentSession = async (savedToken, deviceUid) => {
+    const response = await axios.get(`${BASE_URL}/api/sessions/current`, {
+      headers: {
+        ...(savedToken ? { Authorization: `Bearer ${savedToken}` } : {}),
+      },
+      params: {
+        deviceUid,
+      },
+    });
+
+    if (!response.data?.success) return null;
+
+    return resolveCurrentSessionData(response.data);
   };
 
   const checkHomeActiveSession = async (isSilent = false) => {
     let savedToken = null;
 
     try {
-      if (!isSilent) {
+      if (!isSilent && isMountedRef.current) {
         setIsLoading(true);
         logHome("홈 상태 초기 조회 시작");
       }
 
       savedToken = await AsyncStorage.getItem("accessToken");
-      setToken(savedToken);
 
-      const deviceUid = "DEVICE-001";
+      if (isMountedRef.current) {
+        setToken(savedToken);
+      }
+
+      const deviceUid = await getDeviceUid();
 
       logHome("현재 세션 조회 요청", {
         deviceUid,
@@ -401,17 +475,10 @@ export default function HomeScreen() {
         silent: isSilent,
       });
 
-      let response = null;
+      let sessionData = null;
 
       try {
-        response = await axios.get(
-          `${BASE_URL}/api/sessions/current?deviceUid=${deviceUid}`,
-          {
-            headers: {
-              ...(savedToken ? { Authorization: `Bearer ${savedToken}` } : {}),
-            },
-          }
-        );
+        sessionData = await requestCurrentSession(savedToken, deviceUid);
       } catch (error) {
         const serverError =
           error.response?.data?.message ||
@@ -421,50 +488,48 @@ export default function HomeScreen() {
         logHome("현재 세션 조회 실패", serverError);
       }
 
-      if (response?.data?.success) {
-        const sessionData = response.data?.data || null;
-        const nextSessionId = sessionData ? getSessionId(sessionData) : null;
-        const sessionStatus = sessionData ? getSessionStatus(sessionData) : "";
-        const isIncoming = Boolean(
-          sessionData && nextSessionId && isActiveSession(sessionData)
-        );
+      const nextSessionId = sessionData ? getSessionId(sessionData) : null;
+      const sessionStatus = sessionData ? getSessionStatus(sessionData) : "";
+      const endedAt =
+        sessionData?.endedAt ||
+        sessionData?.endTime ||
+        sessionData?.closedAt ||
+        null;
 
-        logHome("현재 세션 응답", {
-          exists: Boolean(sessionData),
-          sessionId: nextSessionId,
-          status: sessionStatus || null,
-          endedAt: sessionData?.endedAt || null,
-          isIncoming,
-        });
+      const isIncoming = Boolean(
+        sessionData && nextSessionId && isActiveSession(sessionData)
+      );
 
-        if (isIncoming) {
-          if (intercomStatusRef.current !== "incoming") {
-            triggerHardwareAlert("incoming");
-          }
+      logHome("현재 세션 응답", {
+        exists: Boolean(sessionData),
+        sessionId: nextSessionId,
+        status: sessionStatus || null,
+        endedAt,
+        isIncoming,
+        raw: sessionData,
+      });
 
-          updateIntercomStatus(
-            "incoming",
-            "active session detected",
-            nextSessionId
-          );
-        } else {
-          if (intercomStatusRef.current === "incoming") {
-            triggerHardwareAlert("idle");
-          }
+      const previousStatus = intercomStatusRef.current;
 
-          updateIntercomStatus("idle", "no active session", null);
+      if (isIncoming) {
+        if (intercomStatusRef.current !== "incoming") {
+          triggerHardwareAlert("incoming");
         }
-      } else {
-        logHome("현재 세션 없음 또는 응답 확인 필요", response?.data);
 
+        updateIntercomStatus(
+          "incoming",
+          "active session detected",
+          nextSessionId
+        );
+      } else {
         if (intercomStatusRef.current === "incoming") {
           triggerHardwareAlert("idle");
         }
 
-        updateIntercomStatus("idle", "current session response empty", null);
+        updateIntercomStatus("idle", "no active session", null);
       }
 
-      if (!isSilent) {
+      if (!isSilent || previousStatus !== intercomStatusRef.current) {
         await fetchRecentLogs(savedToken);
       }
     } catch (error) {
@@ -485,11 +550,34 @@ export default function HomeScreen() {
         await fetchRecentLogs(savedToken);
       }
     } finally {
-      if (!isSilent) {
+      if (!isSilent && isMountedRef.current) {
         setIsLoading(false);
       }
     }
   };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      Vibration.cancel();
+    };
+  }, []);
+
+  useEffect(() => {
+    const routeStatus = route.params?.intercomStatus;
+    const routeSessionId = route.params?.activeSessionId ?? null;
+
+    if (routeStatus === "idle" && !routeSessionId) {
+      updateIntercomStatus("idle", "route params idle", null);
+      Vibration.cancel();
+    }
+  }, [
+    route.params?.refresh,
+    route.params?.intercomStatus,
+    route.params?.activeSessionId,
+  ]);
 
   useEffect(() => {
     let pollingTimer = null;
@@ -514,39 +602,86 @@ export default function HomeScreen() {
     };
   }, [isFocused]);
 
-  const handleStatusCardPress = () => {
-    const targetSessionId = activeSessionId || activeSessionIdRef.current;
-
+  const handleStatusCardPress = async () => {
     logHome("상태 카드 클릭", {
       intercomStatus,
-      activeSessionId: targetSessionId,
+      activeSessionId: activeSessionId || activeSessionIdRef.current,
     });
-
-    if (intercomStatus === "incoming") {
-      Vibration.cancel();
-
-      if (!targetSessionId) {
-        logHome("인터폰 진입 실패 - activeSessionId 없음");
-        Alert.alert("오류", "연결된 인터폰 세션 정보를 찾을 수 없습니다.");
-        checkHomeActiveSession(false);
-        return;
-      }
-
-      navigation.navigate("IntercomChat", {
-        sessionId: targetSessionId,
-        token,
-      });
-      return;
-    }
 
     if (intercomStatus === "disconnected") {
       navigation.navigate("QrVerify");
       return;
     }
 
-    navigation.navigate("MainTab", {
-      screen: "히스토리",
-    });
+    if (intercomStatus !== "incoming") {
+      navigation.navigate("MainTab", {
+        screen: "히스토리",
+        params: {
+          refresh: Date.now(),
+        },
+      });
+      return;
+    }
+
+    try {
+      Vibration.cancel();
+
+      const savedToken = token || (await AsyncStorage.getItem("accessToken"));
+      const deviceUid = await getDeviceUid();
+
+      if (!savedToken) {
+        Alert.alert("안내", "로그인이 필요합니다.");
+        updateIntercomStatus("idle", "missing token before enter", null);
+        return;
+      }
+
+      const currentSession = await requestCurrentSession(savedToken, deviceUid);
+      const currentSessionId = getSessionId(currentSession);
+
+      if (
+        !currentSession ||
+        !currentSessionId ||
+        !isActiveSession(currentSession)
+      ) {
+        updateIntercomStatus("idle", "stale session before enter", null);
+        await fetchRecentLogs(savedToken);
+
+        Alert.alert("안내", "이미 종료된 통화입니다.");
+        return;
+      }
+
+      updateIntercomStatus(
+        "incoming",
+        "verified before enter",
+        currentSessionId
+      );
+
+      navigation.navigate("인터폰", {
+        sessionId: currentSessionId,
+        activeSessionId: currentSessionId,
+        intercomStatus: "incoming",
+        enteredFrom: "home",
+        refreshKey: Date.now(),
+        token: savedToken,
+        deviceUid,
+      });
+    } catch (error) {
+      const serverError =
+        error.response?.data?.message ||
+        JSON.stringify(error.response?.data) ||
+        error.message;
+
+      logHome("인터폰 진입 전 세션 확인 실패", serverError);
+
+      updateIntercomStatus("idle", "session verification error", null);
+
+      const savedToken = token || (await AsyncStorage.getItem("accessToken"));
+      if (savedToken) {
+        await fetchRecentLogs(savedToken);
+      }
+
+      Alert.alert("안내", "현재 진행 중인 통화가 없습니다.");
+    }
   };
 
   const handlePressRecentCall = (item) => {
@@ -618,8 +753,7 @@ export default function HomeScreen() {
                     "인터폰 장치가 연결되지 않았습니다."}
                   {intercomStatus === "incoming" &&
                     "인터폰 호출이 들어왔습니다."}
-                  {intercomStatus === "idle" &&
-                    "인터폰 호출 대기 중입니다."}
+                  {intercomStatus === "idle" && "인터폰 호출 대기 중입니다."}
                 </BannerMainTitle>
 
                 <BannerSubDescription>

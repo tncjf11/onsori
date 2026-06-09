@@ -26,8 +26,7 @@ const yellowBarImage = require("../../assets/yellowbar.png");
 
 const REST_API_KEY = "6995a27f1c3c0a59b90e27ae3b9cdbe1";
 const CLIENT_SECRET = "bFbFbVNKgMN9O9GVTVY0qE3qzDrACDcp";
-const REDIRECT_URI =
-  "https://voicenotice-backend.onrender.com/login/oauth2/code/kakao";
+const REDIRECT_URI = `${BASE_URL}/login/oauth2/code/kakao`;
 
 export default function ResidentLoginScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
