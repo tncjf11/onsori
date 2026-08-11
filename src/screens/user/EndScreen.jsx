@@ -31,104 +31,59 @@ export default function EndScreen() {
     null;
 
   const routeSessionId =
-    route.params?.sessionId ?? incomingItem.sessionId ?? null;
+    route.params?.sessionId ??
+    incomingItem.sessionId ??
+    null;
 
   const [detailData, setDetailData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  useEffect(() => {
-    const fetchLogDetail = async () => {
-      try {
-        setIsLoading(true);
+  // =========================================================
+  // 로그인 만료 처리
+  //
+  // 중요:
+  // deviceUid
+  // isVerifiedUser
+  // pairedUserId
+  //
+  // 위 QR 페어링 정보는 삭제하지 않는다.
+  // =========================================================
 
-        const savedToken = await AsyncStorage.getItem("accessToken");
+  const handleAuthExpired = async () => {
+    try {
+      await AsyncStorage.removeItem("accessToken");
+    } catch (error) {
+      console.log(
+        "[END_SCREEN] accessToken 삭제 실패:",
+        error?.message
+      );
+    }
 
-        if (!savedToken) {
-          console.log("저장된 accessToken이 없습니다.");
-          setDetailData(null);
-          return;
-        }
-
-        let logDetail =
-          Object.keys(incomingItem).length > 0 ? incomingItem : null;
-
-        if (logId) {
-          try {
-            const logResponse = await axios.get(
-              `${BASE_URL}/api/intercom-logs/${logId}`,
-              {
-                headers: {
-                  Authorization: `Bearer ${savedToken}`,
+    Alert.alert(
+      "로그인 만료",
+      "로그인 정보가 만료되었습니다. 다시 로그인해 주세요.",
+      [
+        {
+          text: "확인",
+          onPress: () => {
+            navigation.reset({
+              index: 0,
+              routes: [
+                {
+                  name: "ResidentLogin",
                 },
-              }
-            );
+              ],
+            });
+          },
+        },
+      ]
+    );
+  };
 
-            if (logResponse.data?.success && logResponse.data?.data) {
-              logDetail = {
-                ...logDetail,
-                ...logResponse.data.data,
-              };
-            }
-          } catch (error) {
-            console.error("인터폰 로그 상세 조회 실패:", error?.message);
-          }
-        }
-
-        const sessionId =
-          logDetail?.sessionId ??
-          logDetail?.callSessionId ??
-          logDetail?.intercomSessionId ??
-          routeSessionId;
-
-        let sessionMessages = [];
-
-        if (sessionId) {
-          try {
-            const messageResponse = await axios.get(
-              `${BASE_URL}/api/sessions/${sessionId}/messages`,
-              {
-                headers: {
-                  Authorization: `Bearer ${savedToken}`,
-                },
-              }
-            );
-
-            if (
-              messageResponse.data?.success &&
-              Array.isArray(messageResponse.data?.data)
-            ) {
-              sessionMessages = messageResponse.data.data;
-            }
-          } catch (error) {
-            console.error("세션 메시지 조회 실패:", error?.message);
-          }
-        }
-
-        const parsedMessages =
-          sessionMessages.length > 0
-            ? parseSessionMessages(sessionMessages, logDetail)
-            : parseMessagesFromLog(logDetail);
-
-        const baseTime =
-          getLogDateValue(logDetail) ||
-          getLogDateValue(sessionMessages[0]) ||
-          getLogDateValue(incomingItem);
-
-        setDetailData({
-          time: formatFormattedTime(baseTime),
-          tags: buildTags(logDetail),
-          messages: parsedMessages,
-        });
-      } catch (error) {
-        console.error("EndScreen 데이터 조회 실패:", error?.message);
-        setDetailData(null);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchLogDetail();
-  }, [logId, routeSessionId]);
+  // =========================================================
+  // Status
+  // =========================================================
 
   const normalizeStatus = (value) => {
     return String(value || "")
@@ -155,11 +110,20 @@ export default function EndScreen() {
 
   const getStatusType = (data = {}) => {
     const status = normalizeStatus(
-      data.status || data.sessionStatus || data.callStatus || data.state || ""
+      data.status ||
+        data.sessionStatus ||
+        data.callStatus ||
+        data.state ||
+        ""
     );
 
-    const connectionStatus = String(data.connectionStatus || "").trim();
-    const sttStatus = String(data.sttStatus || "").trim();
+    const connectionStatus = String(
+      data.connectionStatus || ""
+    ).trim();
+
+    const sttStatus = String(
+      data.sttStatus || ""
+    ).trim();
 
     const hasEndedAt = Boolean(
       data.endedAt ||
@@ -172,9 +136,13 @@ export default function EndScreen() {
     if (
       connectionStatus === "미응답" ||
       sttStatus === "중단" ||
-      ["FAILED", "MISSED", "NO_ANSWER", "CANCELED", "CANCELLED"].includes(
-        status
-      )
+      [
+        "FAILED",
+        "MISSED",
+        "NO_ANSWER",
+        "CANCELED",
+        "CANCELLED",
+      ].includes(status)
     ) {
       return "FAILED";
     }
@@ -197,9 +165,14 @@ export default function EndScreen() {
 
     if (
       connectionStatus === "연결" ||
-      ["OPEN", "CALLING", "TALKING", "ONGOING", "ACTIVE", "CONNECTED"].includes(
-        status
-      )
+      [
+        "OPEN",
+        "CALLING",
+        "TALKING",
+        "ONGOING",
+        "ACTIVE",
+        "CONNECTED",
+      ].includes(status)
     ) {
       return "ACTIVE";
     }
@@ -210,18 +183,32 @@ export default function EndScreen() {
   const getStatusTag = (data = {}) => {
     const statusType = getStatusType(data);
 
-    if (statusType === "ENDED") return "종료 / 완료";
-    if (statusType === "FAILED") return "미응답 / 중단";
-    if (statusType === "ACTIVE") return "연결 / 진행 중";
+    if (statusType === "ENDED") {
+      return "종료 / 완료";
+    }
+
+    if (statusType === "FAILED") {
+      return "미응답 / 중단";
+    }
+
+    if (statusType === "ACTIVE") {
+      return "연결 / 진행 중";
+    }
 
     return null;
   };
+
+  // =========================================================
+  // Tags
+  // =========================================================
 
   const buildTags = (logDetail = {}) => {
     const baseTags = [];
 
     if (Array.isArray(logDetail?.tags)) {
-      baseTags.push(...logDetail.tags.filter(Boolean));
+      baseTags.push(
+        ...logDetail.tags.filter(Boolean)
+      );
     }
 
     if (logDetail?.intent) {
@@ -234,12 +221,26 @@ export default function EndScreen() {
 
     const statusTag = getStatusTag(logDetail);
 
-    if (statusTag && !baseTags.includes(statusTag)) {
-      return [statusTag, ...baseTags];
+    const uniqueTags = Array.from(
+      new Set(baseTags)
+    );
+
+    if (
+      statusTag &&
+      !uniqueTags.includes(statusTag)
+    ) {
+      return [
+        statusTag,
+        ...uniqueTags,
+      ];
     }
 
-    return baseTags;
+    return uniqueTags;
   };
+
+  // =========================================================
+  // Message helper
+  // =========================================================
 
   const getMessageText = (msg = {}) => {
     return (
@@ -266,7 +267,11 @@ export default function EndScreen() {
     );
   };
 
-  const getMessageId = (msg = {}, idx = 0, prefix = "msg") => {
+  const getMessageId = (
+    msg = {},
+    idx = 0,
+    prefix = "msg"
+  ) => {
     return (
       msg.messageId ??
       msg.id ??
@@ -276,49 +281,100 @@ export default function EndScreen() {
     );
   };
 
-  const parseSessionMessages = (messages, logDetail) => {
+  // =========================================================
+  // Session message parse
+  // =========================================================
+
+  const parseSessionMessages = (
+    messages,
+    logDetail
+  ) => {
     const uniqueMap = new Map();
 
     messages.forEach((msg, idx) => {
       const senderValue = String(
-        msg.senderType || msg.sender || msg.role || msg.type || ""
+        msg.senderType ||
+          msg.sender ||
+          msg.role ||
+          msg.type ||
+          ""
       ).toUpperCase();
 
-      const isSystem = senderValue === "SYSTEM";
+      const isSystem =
+        senderValue === "SYSTEM";
 
       const isVisitor =
         senderValue === "VISITOR" ||
         senderValue === "INCOMING" ||
         senderValue === "RECEIVE";
 
-      const createdAt = getLogDateValue(msg) || getLogDateValue(logDetail);
-      const text = String(getMessageText(msg)).trim();
+      const createdAt =
+        getLogDateValue(msg) ||
+        getLogDateValue(logDetail);
 
-      if (isHiddenMessageText(text)) return;
+      const text = String(
+        getMessageText(msg)
+      ).trim();
 
-      const id = getMessageId(msg, idx, "session-msg");
-      const key = `${id}-${createdAt}-${text}`;
+      if (isHiddenMessageText(text)) {
+        return;
+      }
 
-      if (uniqueMap.has(key)) return;
+      const id =
+        getMessageId(
+          msg,
+          idx,
+          "session-msg"
+        );
+
+      const key =
+        `${id}-${createdAt}-${text}`;
+
+      if (uniqueMap.has(key)) {
+        return;
+      }
 
       uniqueMap.set(key, {
         id,
         text,
-        type: isSystem ? "system" : isVisitor ? "receive" : "send",
-        time: formatBubbleTime(createdAt),
+
+        type: isSystem
+          ? "system"
+          : isVisitor
+            ? "receive"
+            : "send",
+
+        time:
+          formatBubbleTime(
+            createdAt
+          ),
+
         createdAt,
       });
     });
 
-    return appendCallEndedMessage(Array.from(uniqueMap.values()), logDetail);
+    return appendCallEndedMessage(
+      Array.from(
+        uniqueMap.values()
+      ),
+      logDetail
+    );
   };
+
+  // =========================================================
+  // Log fallback message parse
+  // =========================================================
 
   const parseMessagesFromLog = (sData) => {
     if (!sData) {
-      return appendCallEndedMessage([], {});
+      return appendCallEndedMessage(
+        [],
+        {}
+      );
     }
 
     const parsedMessages = [];
+
     const rawMessages =
       sData.chatList ||
       sData.transcripts ||
@@ -326,55 +382,152 @@ export default function EndScreen() {
       sData.conversationMessages ||
       [];
 
-    if (Array.isArray(rawMessages) && rawMessages.length > 0) {
-      rawMessages.forEach((msg, idx) => {
-        const senderValue = String(
-          msg.senderType || msg.sender || msg.role || msg.type || ""
-        ).toUpperCase();
+    if (
+      Array.isArray(rawMessages) &&
+      rawMessages.length > 0
+    ) {
+      rawMessages.forEach(
+        (msg, idx) => {
+          const senderValue =
+            String(
+              msg.senderType ||
+                msg.sender ||
+                msg.role ||
+                msg.type ||
+                ""
+            ).toUpperCase();
 
-        const isSystem = senderValue === "SYSTEM";
+          const isSystem =
+            senderValue ===
+            "SYSTEM";
 
-        const isVisitor =
-          senderValue === "VISITOR" ||
-          senderValue === "INCOMING" ||
-          senderValue === "RECEIVE";
+          const isVisitor =
+            senderValue ===
+              "VISITOR" ||
+            senderValue ===
+              "INCOMING" ||
+            senderValue ===
+              "RECEIVE";
 
-        const createdAt = getLogDateValue(msg) || getLogDateValue(sData);
-        const text = String(getMessageText(msg)).trim();
+          const createdAt =
+            getLogDateValue(
+              msg
+            ) ||
+            getLogDateValue(
+              sData
+            );
 
-        if (isHiddenMessageText(text)) return;
+          const text =
+            String(
+              getMessageText(
+                msg
+              )
+            ).trim();
 
-        parsedMessages.push({
-          id: getMessageId(msg, idx, "log-msg"),
-          text,
-          type: isSystem ? "system" : isVisitor ? "receive" : "send",
-          time: formatBubbleTime(createdAt),
-          createdAt,
-        });
-      });
+          if (
+            isHiddenMessageText(
+              text
+            )
+          ) {
+            return;
+          }
 
-      return appendCallEndedMessage(parsedMessages, sData);
+          parsedMessages.push({
+            id: getMessageId(
+              msg,
+              idx,
+              "log-msg"
+            ),
+
+            text,
+
+            type: isSystem
+              ? "system"
+              : isVisitor
+                ? "receive"
+                : "send",
+
+            time:
+              formatBubbleTime(
+                createdAt
+              ),
+
+            createdAt,
+          });
+        }
+      );
+
+      return appendCallEndedMessage(
+        parsedMessages,
+        sData
+      );
     }
 
-    if (sData.visitorText && sData.visitorText.trim() !== "") {
+    // =====================================================
+    // 방문자 fallback
+    // =====================================================
+
+    if (
+      sData.visitorText &&
+      sData.visitorText.trim() !== ""
+    ) {
       parsedMessages.push({
         id: "visitor-fallback",
-        text: sData.visitorText.trim(),
+
+        text:
+          sData.visitorText.trim(),
+
         type: "receive",
-        time: formatBubbleTime(getLogDateValue(sData)),
-        createdAt: getLogDateValue(sData),
+
+        time:
+          formatBubbleTime(
+            getLogDateValue(
+              sData
+            )
+          ),
+
+        createdAt:
+          getLogDateValue(
+            sData
+          ),
       });
     }
 
-    if (sData.residentReply && sData.residentReply.trim() !== "") {
+    // =====================================================
+    // 사용자 응답 fallback
+    // =====================================================
+
+    if (
+      sData.residentReply &&
+      sData.residentReply.trim() !== ""
+    ) {
+      const replyTime =
+        sData.updatedAt ||
+        getLogDateValue(
+          sData
+        );
+
       parsedMessages.push({
         id: "resident-fallback",
-        text: sData.residentReply.trim(),
+
+        text:
+          sData.residentReply.trim(),
+
         type: "send",
-        time: formatBubbleTime(sData.updatedAt || getLogDateValue(sData)),
-        createdAt: sData.updatedAt || getLogDateValue(sData),
+
+        time:
+          formatBubbleTime(
+            replyTime
+          ),
+
+        createdAt:
+          replyTime,
       });
     }
+
+    // =====================================================
+    // Summary fallback
+    // =====================================================
 
     if (
       parsedMessages.length === 0 &&
@@ -384,36 +537,70 @@ export default function EndScreen() {
     ) {
       parsedMessages.push({
         id: "summary-fallback",
-        text: `요약: ${sData.summary.trim()}`,
+
+        text:
+          `요약: ${sData.summary.trim()}`,
+
         type: "system",
-        time: formatBubbleTime(getLogDateValue(sData)),
-        createdAt: getLogDateValue(sData),
+
+        time:
+          formatBubbleTime(
+            getLogDateValue(
+              sData
+            )
+          ),
+
+        createdAt:
+          getLogDateValue(
+            sData
+          ),
       });
     }
 
-    return appendCallEndedMessage(parsedMessages, sData);
+    return appendCallEndedMessage(
+      parsedMessages,
+      sData
+    );
   };
 
-  const appendCallEndedMessage = (messages, sData = {}) => {
-    const alreadyHasEndMessage = messages.some(
-      (msg) =>
-        msg.type === "system" &&
-        (msg.text === "통화가 종료되었습니다." ||
-          msg.text === "통화가 종료되었습니다")
-    );
+  // =========================================================
+  // 종료 시스템 메시지
+  // =========================================================
+
+  const appendCallEndedMessage = (
+    messages,
+    sData = {}
+  ) => {
+    const alreadyHasEndMessage =
+      messages.some(
+        (msg) =>
+          msg.type === "system" &&
+          (
+            msg.text ===
+              "통화가 종료되었습니다." ||
+            msg.text ===
+              "통화가 종료되었습니다" ||
+            msg.text ===
+              "통화가 연결되지 않았습니다."
+          )
+      );
 
     if (alreadyHasEndMessage) {
       return messages;
     }
 
-    const statusType = getStatusType(sData);
+    const statusType =
+      getStatusType(sData);
 
     const endText =
       statusType === "FAILED"
         ? "통화가 연결되지 않았습니다."
         : "통화가 종료되었습니다.";
 
-    const lastMessage = messages[messages.length - 1];
+    const lastMessage =
+      messages[
+        messages.length - 1
+      ];
 
     const endTime =
       sData.endedAt ||
@@ -423,207 +610,938 @@ export default function EndScreen() {
       sData.finishedAt ||
       sData.updatedAt ||
       lastMessage?.createdAt ||
-      getLogDateValue(sData);
+      getLogDateValue(
+        sData
+      );
 
     return [
       ...messages,
+
       {
-        id: "call-ended-system",
-        text: endText,
-        type: "system",
-        time: formatBubbleTime(endTime),
-        createdAt: endTime,
+        id:
+          "call-ended-system",
+
+        text:
+          endText,
+
+        type:
+          "system",
+
+        time:
+          formatBubbleTime(
+            endTime
+          ),
+
+        createdAt:
+          endTime,
       },
     ];
   };
 
-  const handleDeleteLog = () => {
-    if (!logId) {
-      Alert.alert("오류", "삭제할 기록 정보를 찾을 수 없습니다.");
-      return;
-    }
+  // =========================================================
+  // 상세 조회
+  // =========================================================
 
-    Alert.alert("기록 삭제", "정말로 이 인터폰 통화 기록을 삭제하시겠습니까?", [
-      { text: "취소", style: "cancel" },
-      {
-        text: "삭제",
-        style: "destructive",
-        onPress: async () => {
+  useEffect(() => {
+    let isCancelled = false;
+
+    const fetchLogDetail = async () => {
+      try {
+        setIsLoading(true);
+
+        const savedToken =
+          await AsyncStorage.getItem(
+            "accessToken"
+          );
+
+        if (!savedToken) {
+          console.log(
+            "[END_SCREEN] 저장된 accessToken이 없습니다."
+          );
+
+          setDetailData(null);
+
+          await handleAuthExpired();
+
+          return;
+        }
+
+        let logDetail =
+          Object.keys(
+            incomingItem
+          ).length > 0
+            ? incomingItem
+            : null;
+
+        // ===================================================
+        // Intercom log 상세 조회
+        // ===================================================
+
+        if (logId) {
           try {
-            const savedToken = await AsyncStorage.getItem("accessToken");
+            const logResponse =
+              await axios.get(
+                `${BASE_URL}/api/intercom-logs/${logId}`,
+                {
+                  headers: {
+                    Authorization:
+                      `Bearer ${savedToken}`,
+                  },
 
-            if (!savedToken) {
-              Alert.alert("오류", "로그인이 필요합니다.");
-              return;
+                  timeout: 10000,
+                }
+              );
+
+            if (
+              logResponse.data
+                ?.success &&
+              logResponse.data
+                ?.data
+            ) {
+              logDetail = {
+                ...logDetail,
+                ...logResponse.data
+                  .data,
+              };
             }
+          } catch (error) {
+            const status =
+              error.response
+                ?.status;
 
-            const response = await axios.delete(
-              `${BASE_URL}/api/intercom-logs/${logId}`,
+            const serverError =
+              error.response?.data
+                ?.message ||
+              error.response?.data
+                ?.error ||
+              error.message;
+
+            console.error(
+              "[END_SCREEN] 인터폰 로그 상세 조회 실패:",
               {
-                headers: {
-                  Authorization: `Bearer ${savedToken}`,
-                },
+                status,
+                error:
+                  serverError,
               }
             );
 
-            if (response.data?.success) {
-              Alert.alert("완료", "기록이 정상적으로 삭제되었습니다.", [
+            if (
+              status === 401 ||
+              status === 403
+            ) {
+              await handleAuthExpired();
+              return;
+            }
+
+            /**
+             * 상세 API만 실패한 경우
+             * route로 전달받은 incomingItem이 있다면
+             * 그대로 계속 사용한다.
+             */
+          }
+        }
+
+        // ===================================================
+        // Session ID
+        // ===================================================
+
+        const sessionId =
+          logDetail?.sessionId ??
+          logDetail
+            ?.callSessionId ??
+          logDetail
+            ?.intercomSessionId ??
+          routeSessionId;
+
+        let sessionMessages = [];
+
+        // ===================================================
+        // Session messages 조회
+        // ===================================================
+
+        if (sessionId) {
+          try {
+            const messageResponse =
+              await axios.get(
+                `${BASE_URL}/api/sessions/${sessionId}/messages`,
                 {
-                  text: "확인",
-                  onPress: () =>
-                    navigation.navigate("MainTab", { screen: "히스토리" }),
-                },
-              ]);
-            } else {
-              Alert.alert(
-                "실패",
-                response.data?.message || "삭제 처리에 실패했습니다."
+                  headers: {
+                    Authorization:
+                      `Bearer ${savedToken}`,
+                  },
+
+                  timeout: 10000,
+                }
               );
+
+            if (
+              messageResponse.data
+                ?.success &&
+              Array.isArray(
+                messageResponse.data
+                  ?.data
+              )
+            ) {
+              sessionMessages =
+                messageResponse.data
+                  .data;
             }
           } catch (error) {
-            console.error("인터폰 로그 삭제 실패:", error?.message);
-            Alert.alert("오류", "서버 통신 중 문제가 발생했습니다.");
+            const status =
+              error.response
+                ?.status;
+
+            const serverError =
+              error.response?.data
+                ?.message ||
+              error.response?.data
+                ?.error ||
+              JSON.stringify(
+                error.response?.data
+              ) ||
+              error.message;
+
+            console.error(
+              "[END_SCREEN] 세션 메시지 조회 실패:",
+              {
+                sessionId,
+                status,
+                error:
+                  serverError,
+              }
+            );
+
+            // =============================================
+            // 로그인 만료
+            // =============================================
+
+            if (
+              status === 401 ||
+              status === 403
+            ) {
+              await handleAuthExpired();
+              return;
+            }
+
+            // =============================================
+            // 세션 권한 없음
+            //
+            // 기록 화면에서는 현재 통화 화면처럼
+            // 무조건 QR 재인증으로 보내지 않는다.
+            //
+            // 세션 메시지만 가져오지 못하고
+            // 로그 자체 내용으로 fallback한다.
+            // =============================================
+
+            if (
+              status === 400 &&
+              String(
+                serverError ||
+                  ""
+              ).includes(
+                "권한"
+              )
+            ) {
+              console.warn(
+                "[END_SCREEN] 해당 세션 메시지 접근 권한 없음 - 로그 데이터로 대체",
+                {
+                  sessionId,
+                }
+              );
+
+              sessionMessages =
+                [];
+            }
           }
+        }
+
+        if (isCancelled) {
+          return;
+        }
+
+        // ===================================================
+        // 메시지 구성
+        // ===================================================
+
+        const parsedMessages =
+          sessionMessages.length > 0
+            ? parseSessionMessages(
+                sessionMessages,
+                logDetail
+              )
+            : parseMessagesFromLog(
+                logDetail
+              );
+
+        const baseTime =
+          getLogDateValue(
+            logDetail
+          ) ||
+          getLogDateValue(
+            sessionMessages[0]
+          ) ||
+          getLogDateValue(
+            incomingItem
+          );
+
+        if (!isCancelled) {
+          setDetailData({
+            time:
+              formatFormattedTime(
+                baseTime
+              ),
+
+            tags:
+              buildTags(
+                logDetail
+              ),
+
+            messages:
+              parsedMessages,
+          });
+        }
+      } catch (error) {
+        const status =
+          error.response?.status;
+
+        const serverError =
+          error.response?.data
+            ?.message ||
+          error.response?.data
+            ?.error ||
+          error.message;
+
+        console.error(
+          "[END_SCREEN] 데이터 조회 실패:",
+          {
+            status,
+            error:
+              serverError,
+          }
+        );
+
+        if (
+          status === 401 ||
+          status === 403
+        ) {
+          await handleAuthExpired();
+          return;
+        }
+
+        if (!isCancelled) {
+          setDetailData(null);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    fetchLogDetail();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    logId,
+    routeSessionId,
+  ]);
+
+  // =========================================================
+  // 기록 삭제
+  // =========================================================
+
+  const handleDeleteLog = () => {
+    if (!logId) {
+      Alert.alert(
+        "오류",
+        "삭제할 기록 정보를 찾을 수 없습니다."
+      );
+
+      return;
+    }
+
+    if (isDeleting) {
+      return;
+    }
+
+    Alert.alert(
+      "기록 삭제",
+      "정말로 이 인터폰 통화 기록을 삭제하시겠습니까?",
+      [
+        {
+          text: "취소",
+          style: "cancel",
         },
-      },
-    ]);
+        {
+          text: "삭제",
+          style: "destructive",
+
+          onPress: async () => {
+            try {
+              setIsDeleting(true);
+
+              const savedToken =
+                await AsyncStorage.getItem(
+                  "accessToken"
+                );
+
+              if (!savedToken) {
+                await handleAuthExpired();
+                return;
+              }
+
+              const response =
+                await axios.delete(
+                  `${BASE_URL}/api/intercom-logs/${logId}`,
+                  {
+                    headers: {
+                      Authorization:
+                        `Bearer ${savedToken}`,
+                    },
+
+                    timeout: 10000,
+                  }
+                );
+
+              if (
+                response.data
+                  ?.success
+              ) {
+                Alert.alert(
+                  "완료",
+                  "기록이 정상적으로 삭제되었습니다.",
+                  [
+                    {
+                      text:
+                        "확인",
+
+                      onPress:
+                        () =>
+                          navigation.navigate(
+                            "MainTab",
+                            {
+                              screen:
+                                "히스토리",
+
+                              refresh:
+                                Date.now(),
+                            }
+                          ),
+                    },
+                  ]
+                );
+
+                return;
+              }
+
+              Alert.alert(
+                "실패",
+                response.data
+                  ?.message ||
+                  "삭제 처리에 실패했습니다."
+              );
+            } catch (error) {
+              const status =
+                error.response
+                  ?.status;
+
+              const serverError =
+                error.response
+                  ?.data
+                  ?.message ||
+                error.response
+                  ?.data
+                  ?.error ||
+                error.message;
+
+              console.error(
+                "[END_SCREEN] 인터폰 로그 삭제 실패:",
+                {
+                  status,
+                  error:
+                    serverError,
+                }
+              );
+
+              if (
+                status === 401 ||
+                status === 403
+              ) {
+                await handleAuthExpired();
+                return;
+              }
+
+              if (
+                status === 404
+              ) {
+                Alert.alert(
+                  "안내",
+                  "이미 삭제되었거나 존재하지 않는 기록입니다.",
+                  [
+                    {
+                      text:
+                        "확인",
+
+                      onPress:
+                        () =>
+                          navigation.navigate(
+                            "MainTab",
+                            {
+                              screen:
+                                "히스토리",
+
+                              refresh:
+                                Date.now(),
+                            }
+                          ),
+                    },
+                  ]
+                );
+
+                return;
+              }
+
+              Alert.alert(
+                "오류",
+                serverError ||
+                  "서버 통신 중 문제가 발생했습니다."
+              );
+            } finally {
+              setIsDeleting(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
+  // =========================================================
+  // ★ 시간 처리
+  //
+  // 기존 +9시간 보정 그대로 유지
+  // =========================================================
+
   const parseKstDate = (isoString) => {
-    if (!isoString) return null;
+    if (!isoString) {
+      return null;
+    }
 
     try {
-      const stringValue = String(isoString).trim();
+      const stringValue =
+        String(
+          isoString
+        ).trim();
 
       const hasExplicitTimezone =
-        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
+        stringValue.endsWith(
+          "Z"
+        ) ||
+        /[+-]\d{2}:\d{2}$/.test(
+          stringValue
+        );
 
-      if (hasExplicitTimezone) {
-  const date = new Date(stringValue);
-  if (Number.isNaN(date.getTime())) return null;
+      // =====================================================
+      // timezone이 명시된 경우도
+      // 기존 방식대로 +9시간
+      // =====================================================
 
-  return new Date(date.getTime() + 9 * 60 * 60 * 1000);
-}
+      if (
+        hasExplicitTimezone
+      ) {
+        const date =
+          new Date(
+            stringValue
+          );
 
-      const normalized = stringValue.replace("T", " ");
-      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
-      const [year, month, day] = datePart.split("-").map(Number);
-      const [hour = 0, minute = 0, second = 0] = timePart
+        if (
+          Number.isNaN(
+            date.getTime()
+          )
+        ) {
+          return null;
+        }
+
+        return new Date(
+          date.getTime() +
+            9 *
+              60 *
+              60 *
+              1000
+        );
+      }
+
+      // =====================================================
+      // timezone 없는 LocalDateTime도
+      // 기존 방식 그대로 +9시간
+      // =====================================================
+
+      const normalized =
+        stringValue.replace(
+          "T",
+          " "
+        );
+
+      const [
+        datePart,
+        timePart = "00:00:00",
+      ] = normalized.split(
+        " "
+      );
+
+      const [
+        year,
+        month,
+        day,
+      ] = datePart
+        .split("-")
+        .map(Number);
+
+      const [
+        hour = 0,
+        minute = 0,
+        second = 0,
+      ] = timePart
         .split(":")
-        .map((value) => Number(String(value).split(".")[0]));
+        .map((value) =>
+          Number(
+            String(
+              value
+            ).split(".")[0]
+          )
+        );
 
-      if (!year || !month || !day) return null;
+      if (
+        !year ||
+        !month ||
+        !day
+      ) {
+        return null;
+      }
 
-      const date = new Date(year, month - 1, day, hour, minute, second);
-      return new Date(date.getTime() + 9 * 60 * 60 * 1000);
+      const date =
+        new Date(
+          year,
+          month - 1,
+          day,
+          hour,
+          minute,
+          second
+        );
+
+      return new Date(
+        date.getTime() +
+          9 *
+            60 *
+            60 *
+            1000
+      );
     } catch {
       return null;
     }
   };
 
-  const formatFormattedTime = (isoString) => {
-    const date = parseKstDate(isoString);
+  const formatFormattedTime = (
+    isoString
+  ) => {
+    const date =
+      parseKstDate(
+        isoString
+      );
 
-    if (!date || Number.isNaN(date.getTime())) {
-      return isoString || "시간 정보 없음";
+    if (
+      !date ||
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      return (
+        isoString ||
+        "시간 정보 없음"
+      );
     }
 
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    const hh = String(date.getHours()).padStart(2, "0");
-    const min = String(date.getMinutes()).padStart(2, "0");
+    const yyyy =
+      date.getFullYear();
+
+    const mm =
+      String(
+        date.getMonth() +
+          1
+      ).padStart(
+        2,
+        "0"
+      );
+
+    const dd =
+      String(
+        date.getDate()
+      ).padStart(
+        2,
+        "0"
+      );
+
+    const hh =
+      String(
+        date.getHours()
+      ).padStart(
+        2,
+        "0"
+      );
+
+    const min =
+      String(
+        date.getMinutes()
+      ).padStart(
+        2,
+        "0"
+      );
 
     return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
   };
 
-  const formatBubbleTime = (isoString) => {
-    const date = parseKstDate(isoString);
+  const formatBubbleTime = (
+    isoString
+  ) => {
+    const date =
+      parseKstDate(
+        isoString
+      );
 
-    if (!date || Number.isNaN(date.getTime())) {
+    if (
+      !date ||
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
       return "00:00";
     }
 
-    const hh = String(date.getHours()).padStart(2, "0");
-    const min = String(date.getMinutes()).padStart(2, "0");
+    const hh =
+      String(
+        date.getHours()
+      ).padStart(
+        2,
+        "0"
+      );
+
+    const min =
+      String(
+        date.getMinutes()
+      ).padStart(
+        2,
+        "0"
+      );
 
     return `${hh}:${min}`;
   };
 
-  const hasMessages = detailData?.messages?.length > 0;
+  const hasMessages =
+    detailData?.messages
+      ?.length > 0;
+
+  // =========================================================
+  // UI
+  // =========================================================
 
   return (
     <Container>
       <Header>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <BackIcon source={backIcon} resizeMode="contain" />
+        <TouchableOpacity
+          onPress={() =>
+            navigation.goBack()
+          }
+          disabled={
+            isDeleting
+          }
+        >
+          <BackIcon
+            source={backIcon}
+            resizeMode="contain"
+          />
         </TouchableOpacity>
 
         <HeaderTitleContainer>
-          <Logo source={bellIcon} resizeMode="contain" />
-          <HeaderTitle>인터폰 기록 상세</HeaderTitle>
+          <Logo
+            source={bellIcon}
+            resizeMode="contain"
+          />
+
+          <HeaderTitle>
+            인터폰 기록 상세
+          </HeaderTitle>
         </HeaderTitleContainer>
 
-        <TouchableOpacity onPress={handleDeleteLog} style={{ padding: 4 }}>
-          <Ionicons name="trash-outline" size={24} color="#FF4D4D" />
+        <TouchableOpacity
+          onPress={
+            handleDeleteLog
+          }
+          disabled={
+            isDeleting
+          }
+          style={{
+            padding: 4,
+            opacity:
+              isDeleting
+                ? 0.5
+                : 1,
+          }}
+        >
+          {isDeleting ? (
+            <ActivityIndicator
+              size="small"
+              color="#FF4D4D"
+            />
+          ) : (
+            <Ionicons
+              name="trash-outline"
+              size={24}
+              color="#FF4D4D"
+            />
+          )}
         </TouchableOpacity>
       </Header>
 
       {isLoading ? (
         <LoadingWrapper>
-          <ActivityIndicator size="large" color="#06F393" />
-          <LoadingText>상세 통화 기록을 불러오는 중...</LoadingText>
+          <ActivityIndicator
+            size="large"
+            color="#06F393"
+          />
+
+          <LoadingText>
+            상세 통화 기록을 불러오는 중...
+          </LoadingText>
         </LoadingWrapper>
       ) : (
         <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={
+            false
+          }
+          contentContainerStyle={{
+            flexGrow: 1,
+          }}
         >
+          {/* ================= SUMMARY ================= */}
+
           <SummarySection>
             <InfoRow>
-              <InfoLabel>방문 일시</InfoLabel>
-              <InfoValue>{detailData?.time || "시간 정보 없음"}</InfoValue>
+              <InfoLabel>
+                방문 일시
+              </InfoLabel>
+
+              <InfoValue>
+                {detailData?.time ||
+                  "시간 정보 없음"}
+              </InfoValue>
             </InfoRow>
 
             <TagRow>
-              {detailData?.tags?.map((tag, idx) => (
-                <TagBox key={`${tag}-${idx}`}>
-                  <TagText>#{tag}</TagText>
-                </TagBox>
-              ))}
+              {detailData?.tags?.map(
+                (
+                  tag,
+                  idx
+                ) => (
+                  <TagBox
+                    key={`${tag}-${idx}`}
+                  >
+                    <TagText>
+                      #{tag}
+                    </TagText>
+                  </TagBox>
+                )
+              )}
             </TagRow>
           </SummarySection>
 
-          <ChatLogArea style={{ flex: !hasMessages ? 1 : undefined }}>
+          {/* ================= CHAT ================= */}
+
+          <ChatLogArea
+            style={{
+              flex: !hasMessages
+                ? 1
+                : undefined,
+            }}
+          >
             {hasMessages ? (
-              detailData.messages.map((msg) => {
-                if (msg.type === "system") {
+              detailData.messages.map(
+                (msg) => {
+                  if (
+                    msg.type ===
+                    "system"
+                  ) {
+                    return (
+                      <SystemMessageContainer
+                        key={
+                          msg.id
+                        }
+                      >
+                        <SystemMessageText>
+                          {
+                            msg.text
+                          }
+                        </SystemMessageText>
+                      </SystemMessageContainer>
+                    );
+                  }
+
+                  if (
+                    msg.type ===
+                    "receive"
+                  ) {
+                    return (
+                      <ReceiveContainer
+                        key={
+                          msg.id
+                        }
+                      >
+                        <ReceiveBubble>
+                          <BubbleText>
+                            {
+                              msg.text
+                            }
+                          </BubbleText>
+                        </ReceiveBubble>
+
+                        <BubbleTime>
+                          {msg.time ||
+                            "00:00"}
+                        </BubbleTime>
+                      </ReceiveContainer>
+                    );
+                  }
+
                   return (
-                    <SystemMessageContainer key={msg.id}>
-                      <SystemMessageText>{msg.text}</SystemMessageText>
-                    </SystemMessageContainer>
+                    <SendContainer
+                      key={
+                        msg.id
+                      }
+                    >
+                      <SendBubble>
+                        <SendBubbleText>
+                          {
+                            msg.text
+                          }
+                        </SendBubbleText>
+                      </SendBubble>
+
+                      <SendTime>
+                        {msg.time ||
+                          "00:00"}
+                      </SendTime>
+                    </SendContainer>
                   );
                 }
-
-                return msg.type === "receive" ? (
-                  <ReceiveContainer key={msg.id}>
-                    <ReceiveBubble>
-                      <BubbleText>{msg.text}</BubbleText>
-                    </ReceiveBubble>
-                    <BubbleTime>{msg.time || "00:00"}</BubbleTime>
-                  </ReceiveContainer>
-                ) : (
-                  <SendContainer key={msg.id}>
-                    <SendBubble>
-                      <SendBubbleText>{msg.text}</SendBubbleText>
-                    </SendBubble>
-                    <SendTime>{msg.time || "00:00"}</SendTime>
-                  </SendContainer>
-                );
-              })
+              )
             ) : (
               <EmptyChatLogWrapper>
-                <Ionicons name="document-text-outline" size={36} color="#CCC" />
+                <Ionicons
+                  name="document-text-outline"
+                  size={36}
+                  color="#CCC"
+                />
+
                 <EmptyChatLogText>
                   기록된 대화 내역이 없습니다.
                 </EmptyChatLogText>
@@ -631,11 +1549,19 @@ export default function EndScreen() {
             )}
           </ChatLogArea>
 
+          {/* ================= HOME ================= */}
+
           <HomeBtn
             activeOpacity={0.8}
-            onPress={() => navigation.navigate("MainTab")}
+            onPress={() =>
+              navigation.navigate(
+                "MainTab"
+              )
+            }
           >
-            <HomeBtnText>메인 화면으로 이동</HomeBtnText>
+            <HomeBtnText>
+              메인 화면으로 이동
+            </HomeBtnText>
           </HomeBtn>
         </ScrollView>
       )}
@@ -643,9 +1569,15 @@ export default function EndScreen() {
   );
 }
 
-const Container = styled(SafeAreaContainer)`
+// =========================================================
+// STYLE
+// =========================================================
+
+const Container = styled(
+  SafeAreaContainer
+)`
   flex: 1;
-  background-color: #F5F5F5;
+  background-color: #f5f5f5;
 `;
 
 const Header = styled.View`
@@ -655,7 +1587,7 @@ const Header = styled.View`
   padding: 15px 20px;
   background-color: #fff;
   border-bottom-width: 1px;
-  border-bottom-color: #EEE;
+  border-bottom-color: #eee;
 `;
 
 const BackIcon = styled.Image`
@@ -716,7 +1648,7 @@ const TagRow = styled.View`
 `;
 
 const TagBox = styled.View`
-  background-color: #EBF1FA;
+  background-color: #ebf1fa;
   padding: 6px 14px;
   border-radius: 20px;
   margin-right: 8px;
@@ -725,7 +1657,7 @@ const TagBox = styled.View`
 
 const TagText = styled.Text`
   font-size: 12px;
-  color: #4A72B2;
+  color: #4a72b2;
   font-weight: 800;
 `;
 
@@ -743,7 +1675,7 @@ const ReceiveContainer = styled.View`
 
 const ReceiveBubble = styled.View`
   max-width: 75%;
-  background-color: #4A4A4A;
+  background-color: #4a4a4a;
   padding: 12px 18px;
   border-radius: 20px;
   border-top-left-radius: 4px;
@@ -751,7 +1683,7 @@ const ReceiveBubble = styled.View`
 
 const BubbleText = styled.Text`
   font-size: 15px;
-  color: #FFFFFF;
+  color: #ffffff;
   line-height: 22px;
   font-weight: 500;
 `;
@@ -771,7 +1703,7 @@ const SendContainer = styled.View`
 
 const SendBubble = styled.View`
   max-width: 75%;
-  background-color: #6D5D55;
+  background-color: #6d5d55;
   padding: 12px 18px;
   border-radius: 20px;
   border-top-right-radius: 4px;
@@ -779,7 +1711,7 @@ const SendBubble = styled.View`
 
 const SendBubbleText = styled.Text`
   font-size: 15px;
-  color: #FFFFFF;
+  color: #ffffff;
   line-height: 22px;
   font-weight: 500;
 `;
@@ -792,7 +1724,7 @@ const SendTime = styled.Text`
 
 const SystemMessageContainer = styled.View`
   align-self: center;
-  background-color: #E0E0E0;
+  background-color: #e0e0e0;
   padding: 7px 14px;
   border-radius: 18px;
   margin-bottom: 16px;
@@ -841,7 +1773,7 @@ const EmptyChatLogWrapper = styled.View`
 
 const EmptyChatLogText = styled.Text`
   font-size: 14px;
-  color: #BBB;
+  color: #bbb;
   font-weight: 600;
   margin-top: 10px;
   text-align: center;

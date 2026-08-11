@@ -26,25 +26,49 @@ export default function AdminDeviceDetailScreen() {
   const [isLoading, setIsLoading] = useState(!passedItem);
   const [isActionLoading, setIsActionLoading] = useState(false);
 
+  // =========================================================
+  // Device ID
+  // =========================================================
+
   const getTargetDeviceId = () => {
     return (
       deviceId ||
-      device?.id ||
       device?.deviceId ||
-      passedItem?.id ||
+      device?.id ||
       passedItem?.deviceId ||
+      passedItem?.id ||
       null
     );
   };
 
-  const getStatusType = (statusValue) => {
-    const status = String(statusValue || "").toUpperCase();
+  // =========================================================
+  // 상태
+  // =========================================================
 
-    if (status === "ONLINE" || status === "ACTIVE" || status === "ENABLED") {
+  const getStatusType = (statusValue) => {
+    const status = String(statusValue || "")
+      .trim()
+      .toUpperCase();
+
+    if (
+      status === "ACTIVE" ||
+      status === "ONLINE" ||
+      status === "ENABLED"
+    ) {
       return "ONLINE";
     }
 
-    if (status === "ERROR" || status === "FAIL" || status === "FAILED") {
+    if (
+      status === "DELETED"
+    ) {
+      return "DELETED";
+    }
+
+    if (
+      status === "ERROR" ||
+      status === "FAIL" ||
+      status === "FAILED"
+    ) {
       return "ERROR";
     }
 
@@ -54,8 +78,17 @@ export default function AdminDeviceDetailScreen() {
   const getStatusLabel = (statusValue) => {
     const status = getStatusType(statusValue);
 
-    if (status === "ONLINE") return "온라인";
-    if (status === "ERROR") return "오류";
+    if (status === "ONLINE") {
+      return "온라인";
+    }
+
+    if (status === "DELETED") {
+      return "삭제됨";
+    }
+
+    if (status === "ERROR") {
+      return "오류";
+    }
 
     return "오프라인";
   };
@@ -63,58 +96,81 @@ export default function AdminDeviceDetailScreen() {
   const getStatusColor = (statusValue) => {
     const status = getStatusType(statusValue);
 
-    if (status === "ONLINE") return "#06F393";
-    if (status === "ERROR") return "#FF5C5C";
+    if (status === "ONLINE") {
+      return "#06F393";
+    }
+
+    if (status === "DELETED") {
+      return "#FF5C5C";
+    }
+
+    if (status === "ERROR") {
+      return "#FF5C5C";
+    }
 
     return "#999";
   };
 
-  const getBatteryValue = () => {
-    const value = Number(device?.battery ?? device?.batteryLevel ?? 0);
-
-    if (Number.isNaN(value)) return 0;
-
-    return value;
-  };
-
-  const getBatteryColor = (percent) => {
-    if (percent > 70) return "#06F393";
-    if (percent > 20) return "#FFB800";
-    return "#FF5C5C";
-  };
+  // =========================================================
+  // 날짜
+  // =========================================================
 
   const formatDate = (dateValue) => {
-    if (!dateValue) return "기록 없음";
+    if (!dateValue) {
+      return "기록 없음";
+    }
 
     try {
-      const text = String(dateValue);
+      const text = String(dateValue).trim();
 
       if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-        return text;
+        return text.replace(/-/g, "/");
       }
 
       const hasExplicitTimezone =
-        text.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(text);
+        text.endsWith("Z") ||
+        /[+-]\d{2}:\d{2}$/.test(text);
 
       if (hasExplicitTimezone) {
         const date = new Date(text);
 
-        if (Number.isNaN(date.getTime())) return "기록 없음";
+        if (Number.isNaN(date.getTime())) {
+          return "기록 없음";
+        }
 
         const yyyy = date.getFullYear();
-        const mm = String(date.getMonth() + 1).padStart(2, "0");
-        const dd = String(date.getDate()).padStart(2, "0");
-        const hh = String(date.getHours()).padStart(2, "0");
-        const min = String(date.getMinutes()).padStart(2, "0");
+
+        const mm = String(
+          date.getMonth() + 1
+        ).padStart(2, "0");
+
+        const dd = String(
+          date.getDate()
+        ).padStart(2, "0");
+
+        const hh = String(
+          date.getHours()
+        ).padStart(2, "0");
+
+        const min = String(
+          date.getMinutes()
+        ).padStart(2, "0");
 
         return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
       }
 
-      return text.replace("T", " ").substring(0, 16).replace(/-/g, "/");
+      return text
+        .replace("T", " ")
+        .substring(0, 16)
+        .replace(/-/g, "/");
     } catch {
       return "기록 없음";
     }
   };
+
+  // =========================================================
+  // 장치 상세 조회
+  // =========================================================
 
   const fetchDeviceDetail = async () => {
     const targetId = getTargetDeviceId();
@@ -127,10 +183,19 @@ export default function AdminDeviceDetailScreen() {
     try {
       setIsLoading(true);
 
-      const token = await AsyncStorage.getItem("adminToken");
+      const token =
+        await AsyncStorage.getItem("adminToken");
 
       if (!token) {
-        navigation.navigate("AdminLogin");
+        navigation.reset({
+          index: 0,
+          routes: [
+            {
+              name: "AdminLogin",
+            },
+          ],
+        });
+
         return;
       }
 
@@ -140,16 +205,65 @@ export default function AdminDeviceDetailScreen() {
           headers: {
             Authorization: `Bearer ${token}`,
           },
+          timeout: 10000,
         }
       );
 
-      if (response.data?.success && response.data?.data) {
+      if (
+        response.data?.success &&
+        response.data?.data
+      ) {
         setDevice(response.data.data);
-      } else if (passedItem) {
+        return;
+      }
+
+      if (passedItem) {
         setDevice(passedItem);
       }
     } catch (error) {
-      console.error("장치 상세 조회 실패:", error?.message);
+      const status = error.response?.status;
+
+      const serverError =
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        error.message;
+
+      console.error(
+        "[ADMIN_DEVICE_DETAIL] 장치 상세 조회 실패:",
+        {
+          status,
+          error: serverError,
+        }
+      );
+
+      if (
+        status === 401 ||
+        status === 403
+      ) {
+        await AsyncStorage.removeItem("adminToken");
+
+        Alert.alert(
+          "로그인 만료",
+          "관리자 로그인 정보가 만료되었습니다.",
+          [
+            {
+              text: "확인",
+              onPress: () => {
+                navigation.reset({
+                  index: 0,
+                  routes: [
+                    {
+                      name: "AdminLogin",
+                    },
+                  ],
+                });
+              },
+            },
+          ]
+        );
+
+        return;
+      }
 
       if (passedItem) {
         setDevice(passedItem);
@@ -164,6 +278,10 @@ export default function AdminDeviceDetailScreen() {
   useEffect(() => {
     fetchDeviceDetail();
   }, [deviceId]);
+
+  // =========================================================
+  // 장치 제어 문구
+  // =========================================================
 
   const getActionInfo = (actionType) => {
     if (actionType === "disable") {
@@ -201,83 +319,181 @@ export default function AdminDeviceDetailScreen() {
     };
   };
 
+  // =========================================================
+  // 장치 제어
+  // =========================================================
+
   const handleControlDevice = async (actionType) => {
     const targetId = getTargetDeviceId();
 
     if (!targetId) {
-      Alert.alert("오류", "장치 정보를 찾을 수 없습니다.");
+      Alert.alert(
+        "오류",
+        "장치 정보를 찾을 수 없습니다."
+      );
+
       return;
     }
 
-    const actionInfo = getActionInfo(actionType);
+    const actionInfo =
+      getActionInfo(actionType);
 
-    Alert.alert(actionInfo.title, actionInfo.message, [
-      {
-        text: "취소",
-        style: "cancel",
-      },
-      {
-        text: actionInfo.confirmText,
-        style: actionType === "delete" ? "destructive" : "default",
-        onPress: async () => {
-          try {
-            setIsActionLoading(true);
-
-            const token = await AsyncStorage.getItem("adminToken");
-
-            if (!token) {
-              Alert.alert("오류", "관리자 로그인이 필요합니다.");
-              navigation.navigate("AdminLogin");
-              return;
-            }
-
-            const response = await axios.patch(
-              `${BASE_URL}/api/admin/devices/${targetId}/${actionType}`,
-              {},
-              {
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                },
-              }
-            );
-
-            if (response.data?.success === false) {
-              Alert.alert(
-                "실패",
-                response.data?.message || "요청 처리에 실패했습니다."
-              );
-              return;
-            }
-
-            Alert.alert("완료", actionInfo.successMessage, [
-              {
-                text: "확인",
-                onPress: () => {
-                  if (actionType === "delete") {
-                    navigation.goBack();
-                  } else {
-                    fetchDeviceDetail();
-                  }
-                },
-              },
-            ]);
-          } catch (error) {
-            const serverError =
-              error.response?.data?.message ||
-              JSON.stringify(error.response?.data) ||
-              error.message;
-
-            console.error("장치 제어 실패:", serverError);
-            Alert.alert("오류", "요청 처리에 실패했습니다.");
-          } finally {
-            setIsActionLoading(false);
-          }
+    Alert.alert(
+      actionInfo.title,
+      actionInfo.message,
+      [
+        {
+          text: "취소",
+          style: "cancel",
         },
-      },
-    ]);
+        {
+          text: actionInfo.confirmText,
+
+          style:
+            actionType === "delete"
+              ? "destructive"
+              : "default",
+
+          onPress: async () => {
+            try {
+              setIsActionLoading(true);
+
+              const token =
+                await AsyncStorage.getItem(
+                  "adminToken"
+                );
+
+              if (!token) {
+                Alert.alert(
+                  "오류",
+                  "관리자 로그인이 필요합니다."
+                );
+
+                navigation.reset({
+                  index: 0,
+                  routes: [
+                    {
+                      name: "AdminLogin",
+                    },
+                  ],
+                });
+
+                return;
+              }
+
+              const response =
+                await axios.patch(
+                  `${BASE_URL}/api/admin/devices/${targetId}/${actionType}`,
+                  {},
+                  {
+                    headers: {
+                      Authorization:
+                        `Bearer ${token}`,
+                    },
+                    timeout: 10000,
+                  }
+                );
+
+              if (
+                response.data?.success ===
+                false
+              ) {
+                Alert.alert(
+                  "실패",
+                  response.data?.message ||
+                    "요청 처리에 실패했습니다."
+                );
+
+                return;
+              }
+
+              Alert.alert(
+                "완료",
+                actionInfo.successMessage,
+                [
+                  {
+                    text: "확인",
+
+                    onPress: () => {
+                      if (
+                        actionType ===
+                        "delete"
+                      ) {
+                        navigation.goBack();
+                      } else {
+                        fetchDeviceDetail();
+                      }
+                    },
+                  },
+                ]
+              );
+            } catch (error) {
+              const status =
+                error.response?.status;
+
+              const serverError =
+                error.response?.data?.message ||
+                error.response?.data?.error ||
+                error.message;
+
+              console.error(
+                "[ADMIN_DEVICE_DETAIL] 장치 제어 실패:",
+                {
+                  status,
+                  error: serverError,
+                }
+              );
+
+              if (
+                status === 401 ||
+                status === 403
+              ) {
+                await AsyncStorage.removeItem(
+                  "adminToken"
+                );
+
+                Alert.alert(
+                  "로그인 만료",
+                  "관리자 로그인 정보가 만료되었습니다.",
+                  [
+                    {
+                      text: "확인",
+
+                      onPress: () => {
+                        navigation.reset({
+                          index: 0,
+                          routes: [
+                            {
+                              name:
+                                "AdminLogin",
+                            },
+                          ],
+                        });
+                      },
+                    },
+                  ]
+                );
+
+                return;
+              }
+
+              Alert.alert(
+                "오류",
+                serverError ||
+                  "요청 처리에 실패했습니다."
+              );
+            } finally {
+              setIsActionLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
-  const battery = getBatteryValue();
+  // =========================================================
+  // 화면
+  // =========================================================
 
   return (
     <Container>
@@ -286,96 +502,245 @@ export default function AdminDeviceDetailScreen() {
           onPress={() => navigation.goBack()}
           disabled={isActionLoading}
         >
-          <BackIcon source={backIcon} resizeMode="contain" />
+          <BackIcon
+            source={backIcon}
+            resizeMode="contain"
+          />
         </TouchableOpacity>
 
-        <HeaderTitle>장치 상세</HeaderTitle>
+        <HeaderTitle>
+          장치 상세
+        </HeaderTitle>
 
-        <View style={{ width: 24 }} />
+        <View
+          style={{
+            width: 24,
+          }}
+        />
       </Header>
 
       {isLoading ? (
         <LoadingWrapper>
-          <ActivityIndicator size="large" color="#06F393" />
+          <ActivityIndicator
+            size="large"
+            color="#06F393"
+          />
         </LoadingWrapper>
+      ) : !device ? (
+        <EmptyWrapper>
+          <EmptyTitle>
+            장치 정보를 불러올 수 없습니다.
+          </EmptyTitle>
+
+          <EmptySubText>
+            이전 화면으로 돌아가 다시 시도해주세요.
+          </EmptySubText>
+        </EmptyWrapper>
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 110 }}
+          contentContainerStyle={{
+            paddingBottom: 110,
+          }}
         >
           <InfoCard>
-            <CardTitle>장치 정보</CardTitle>
+            <CardTitle>
+              장치 정보
+            </CardTitle>
 
             <InfoRow>
-              <Label>관리 ID</Label>
-              <Value>{device?.id || device?.deviceId || "관리 ID 없음"}</Value>
-            </InfoRow>
+              <Label>
+                관리 ID
+              </Label>
 
-            <InfoRow>
-              <Label>장치 UID</Label>
-              <Value>{device?.deviceUid || "장치 UID 없음"}</Value>
-            </InfoRow>
-
-            <InfoRow>
-              <Label>현재 상태</Label>
-              <Value color={getStatusColor(device?.status)}>
-                {getStatusLabel(device?.status)}
+              <Value>
+                {device?.deviceId ||
+                  device?.id ||
+                  "관리 ID 없음"}
               </Value>
             </InfoRow>
 
             <InfoRow>
-              <Label>등록 일시</Label>
-              <Value>{formatDate(device?.createdAt)}</Value>
+              <Label>
+                장치 UID
+              </Label>
+
+              <Value>
+                {device?.deviceUid ||
+                  "장치 UID 없음"}
+              </Value>
             </InfoRow>
 
             <InfoRow>
-              <Label>최근 수정</Label>
+              <Label>
+                위치
+              </Label>
+
               <Value>
-                {formatDate(
-                  device?.lastUpdate || device?.lastUpdatedAt || device?.updatedAt
+                {device?.location ||
+                  "위치 정보 없음"}
+              </Value>
+            </InfoRow>
+
+            <InfoRow>
+              <Label>
+                현재 상태
+              </Label>
+
+              <Value
+                color={getStatusColor(
+                  device?.status
+                )}
+              >
+                {getStatusLabel(
+                  device?.status
                 )}
               </Value>
             </InfoRow>
 
             <InfoRow>
-              <Label>배터리</Label>
-              <Value color={getBatteryColor(battery)}>{battery}%</Value>
+              <Label>
+                마지막 연결
+              </Label>
+
+              <Value>
+                {formatDate(
+                  device?.lastSeenAt
+                )}
+              </Value>
+            </InfoRow>
+
+            <InfoRow>
+              <Label>
+                등록 일시
+              </Label>
+
+              <Value>
+                {formatDate(
+                  device?.createdAt
+                )}
+              </Value>
+            </InfoRow>
+
+            <InfoRow>
+              <Label>
+                최근 수정
+              </Label>
+
+              <Value>
+                {formatDate(
+                  device?.updatedAt
+                )}
+              </Value>
             </InfoRow>
 
             <Divider />
 
-            <CardTitle style={{ marginTop: 10 }}>장치 제어</CardTitle>
+            <CardTitle
+              style={{
+                marginTop: 10,
+              }}
+            >
+              장치 제어
+            </CardTitle>
+
+            {/* ================= 비활성화 ================= */}
 
             <SettingItem>
-              <SettingLabel color="#FFB800">비활성화</SettingLabel>
+              <SettingLabel
+                color="#FFB800"
+              >
+                비활성화
+              </SettingLabel>
 
               <ActionButton
-                onPress={() => handleControlDevice("disable")}
-                disabled={isActionLoading}
+                onPress={() =>
+                  handleControlDevice(
+                    "disable"
+                  )
+                }
+                disabled={
+                  isActionLoading
+                }
               >
-                <ActionButtonText>실행</ActionButtonText>
+                {isActionLoading ? (
+                  <ActivityIndicator
+                    size="small"
+                    color="#333"
+                  />
+                ) : (
+                  <ActionButtonText>
+                    실행
+                  </ActionButtonText>
+                )}
               </ActionButton>
             </SettingItem>
 
+            {/* ================= 활성화 ================= */}
+
             <SettingItem>
-              <SettingLabel color="#06F393">활성화</SettingLabel>
+              <SettingLabel
+                color="#06F393"
+              >
+                활성화
+              </SettingLabel>
 
               <ActionButton
-                onPress={() => handleControlDevice("enable")}
-                disabled={isActionLoading}
+                onPress={() =>
+                  handleControlDevice(
+                    "enable"
+                  )
+                }
+                disabled={
+                  isActionLoading
+                }
               >
-                <ActionButtonText>실행</ActionButtonText>
+                {isActionLoading ? (
+                  <ActivityIndicator
+                    size="small"
+                    color="#333"
+                  />
+                ) : (
+                  <ActionButtonText>
+                    실행
+                  </ActionButtonText>
+                )}
               </ActionButton>
             </SettingItem>
 
-            <SettingItem style={{ borderBottomWidth: 0 }}>
-              <SettingLabel color="#FF5C5C">삭제</SettingLabel>
+            {/* ================= 삭제 ================= */}
+
+            <SettingItem
+              style={{
+                borderBottomWidth: 0,
+              }}
+            >
+              <SettingLabel
+                color="#FF5C5C"
+              >
+                삭제
+              </SettingLabel>
 
               <DangerButton
-                onPress={() => handleControlDevice("delete")}
-                disabled={isActionLoading}
+                onPress={() =>
+                  handleControlDevice(
+                    "delete"
+                  )
+                }
+                disabled={
+                  isActionLoading
+                }
               >
-                <DangerButtonText>삭제</DangerButtonText>
+                {isActionLoading ? (
+                  <ActivityIndicator
+                    size="small"
+                    color="#FF5C5C"
+                  />
+                ) : (
+                  <DangerButtonText>
+                    삭제
+                  </DangerButtonText>
+                )}
               </DangerButton>
             </SettingItem>
           </InfoCard>
@@ -385,9 +750,15 @@ export default function AdminDeviceDetailScreen() {
   );
 }
 
-const Container = styled(SafeAreaContainer)`
+// =========================================================
+// STYLE
+// =========================================================
+
+const Container = styled(
+  SafeAreaContainer
+)`
   flex: 1;
-  background-color: #F8F9FA;
+  background-color: #f8f9fa;
 `;
 
 const Header = styled.View`
@@ -397,7 +768,7 @@ const Header = styled.View`
   padding: 15px 20px;
   background-color: #fff;
   border-bottom-width: 1px;
-  border-bottom-color: #EEF0F2;
+  border-bottom-color: #eef0f2;
 `;
 
 const BackIcon = styled.Image`
@@ -435,7 +806,7 @@ const InfoRow = styled.View`
   align-items: center;
   padding: 12px 0;
   border-bottom-width: 1px;
-  border-bottom-color: #F5F5F5;
+  border-bottom-color: #f5f5f5;
 `;
 
 const Label = styled.Text`
@@ -448,29 +819,36 @@ const Value = styled.Text`
   text-align: right;
   font-size: 14px;
   font-weight: 700;
-  color: ${(props) => props.color || "#333"};
+  color: ${(props) =>
+    props.color || "#333"};
 `;
 
 const Divider = styled.View`
   height: 1px;
-  background-color: #EEE;
+  background-color: #eee;
   margin: 15px 0;
 `;
 
-const SettingItem = styled(InfoRow)`
+const SettingItem = styled(
+  InfoRow
+)`
   align-items: center;
 `;
 
 const SettingLabel = styled.Text`
   font-size: 14px;
   font-weight: 700;
-  color: ${(props) => props.color || "#333"};
+  color: ${(props) =>
+    props.color || "#333"};
 `;
 
 const ActionButton = styled.TouchableOpacity`
+  min-width: 58px;
   padding: 8px 16px;
   border-radius: 14px;
-  background-color: #F1F2F4;
+  background-color: #f1f2f4;
+  align-items: center;
+  justify-content: center;
 `;
 
 const ActionButtonText = styled.Text`
@@ -479,14 +857,16 @@ const ActionButtonText = styled.Text`
   color: #333;
 `;
 
-const DangerButton = styled(ActionButton)`
-  background-color: #FFF1F1;
+const DangerButton = styled(
+  ActionButton
+)`
+  background-color: #fff1f1;
 `;
 
 const DangerButtonText = styled.Text`
   font-size: 13px;
   font-weight: 800;
-  color: #FF5C5C;
+  color: #ff5c5c;
 `;
 
 const LoadingWrapper = styled.View`
@@ -494,4 +874,24 @@ const LoadingWrapper = styled.View`
   justify-content: center;
   align-items: center;
   padding-top: 100px;
+`;
+
+const EmptyWrapper = styled.View`
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+  padding: 50px 30px;
+`;
+
+const EmptyTitle = styled.Text`
+  font-size: 16px;
+  color: #555;
+  font-weight: 700;
+`;
+
+const EmptySubText = styled.Text`
+  font-size: 13px;
+  color: #999;
+  margin-top: 8px;
+  text-align: center;
 `;

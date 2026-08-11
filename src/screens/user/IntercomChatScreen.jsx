@@ -28,7 +28,9 @@ const sendActive = require("../../assets/send_active.png");
 const callEndIcon = require("../../assets/call_end.png");
 const callEndOverlayImg = require("../../assets/call_end_overlay.png");
 
-const DEFAULT_DEVICE_UID = "DEVICE-001";
+// =========================================================
+// 세션 상태
+// =========================================================
 
 const CLOSED_SESSION_STATUSES = new Set([
   "CLOSED",
@@ -68,10 +70,19 @@ export default function IntercomChatScreen() {
 
   const scrollViewRef = useRef(null);
   const pollingRef = useRef(null);
+
+  // polling API 중복 실행 방지
+  const pollingBusyRef = useRef(false);
+
   const lastVisitorMessageKeyRef = useRef(null);
   const lastMessageSignatureRef = useRef(null);
+
   const isEndingRef = useRef(false);
   const isMountedRef = useRef(true);
+
+  // 동일한 권한 오류 Alert 중복 방지
+  const pairingErrorHandledRef = useRef(false);
+  const authErrorHandledRef = useRef(false);
 
   const {
     sessionId: routeSessionId = null,
@@ -80,91 +91,320 @@ export default function IntercomChatScreen() {
     deviceUid: routeDeviceUid = null,
   } = route.params || {};
 
-  const initialSessionId = routeSessionId || routeActiveSessionId || null;
+  const initialSessionId =
+    routeSessionId ||
+    routeActiveSessionId ||
+    null;
 
+  // =========================================================
+  // State
+  // =========================================================
+
+  /**
+   * 빠른응답은 이제 단일 선택.
+   *
+   * UI 구조를 크게 안 바꾸기 위해
+   * 배열 형태는 유지하지만 최대 1개만 저장.
+   */
   const [selectedTags, setSelectedTags] = useState([]);
+
   const [isOverlayVisible, setIsOverlayVisible] = useState(false);
   const [activeTab, setActiveTab] = useState("인사");
+
   const [isLoading, setIsLoading] = useState(true);
   const [isEnding, setIsEnding] = useState(false);
 
-  const [currentSessionId, setCurrentSessionId] = useState(initialSessionId);
+  const [currentSessionId, setCurrentSessionId] =
+    useState(initialSessionId);
+
   const [messages, setMessages] = useState([]);
+
   const [seconds, setSeconds] = useState(0);
+
   const [token, setToken] = useState(null);
-  const [backendQuickReplies, setBackendQuickReplies] = useState([]);
 
-  const tabs = ["인사", "질문", "대답", "요청", "행동"];
+  const [
+    backendQuickReplies,
+    setBackendQuickReplies,
+  ] = useState([]);
 
-  const getResolvedDeviceUid = async () => {
-    return (
-      routeDeviceUid ||
-      (await AsyncStorage.getItem("deviceUid")) ||
-      (await AsyncStorage.getItem("verifiedDeviceUid")) ||
-      (await AsyncStorage.getItem("intercomDeviceUid")) ||
-      DEFAULT_DEVICE_UID
-    );
+  const tabs = [
+    "인사",
+    "질문",
+    "대답",
+    "요청",
+    "행동",
+  ];
+
+  // =========================================================
+  // 인증된 기기 확인
+  // =========================================================
+
+  /**
+   * 중요
+   *
+   * 예전의
+   *
+   * DEFAULT_DEVICE_UID = "DEVICE-001"
+   *
+   * fallback을 완전히 제거.
+   *
+   * QR 인증된 실제 기기만 사용한다.
+   */
+  const getVerifiedDeviceUid = async () => {
+    try {
+      const [
+        storedDeviceUid,
+        verified,
+        currentUserId,
+        pairedUserId,
+      ] = await Promise.all([
+        AsyncStorage.getItem("deviceUid"),
+        AsyncStorage.getItem("isVerifiedUser"),
+        AsyncStorage.getItem("userId"),
+        AsyncStorage.getItem("pairedUserId"),
+      ]);
+
+      logUserChat("기기 인증 상태 확인", {
+        storedDeviceUid,
+        routeDeviceUid,
+        verified,
+        currentUserId,
+        pairedUserId,
+      });
+
+      if (verified !== "true") {
+        return null;
+      }
+
+      if (!storedDeviceUid) {
+        return null;
+      }
+
+      if (!currentUserId) {
+        return null;
+      }
+
+      if (!pairedUserId) {
+        return null;
+      }
+
+      if (
+        String(currentUserId) !==
+        String(pairedUserId)
+      ) {
+        logUserChat(
+          "현재 사용자와 QR 인증 사용자 불일치",
+          {
+            currentUserId,
+            pairedUserId,
+          }
+        );
+
+        return null;
+      }
+
+      /**
+       * Home에서 routeDeviceUid를 넘겨줬어도
+       * AsyncStorage의 실제 인증 기기를 기준으로 한다.
+       *
+       * route 값이 있다면 일치 여부만 로그로 확인.
+       */
+      if (
+        routeDeviceUid &&
+        String(routeDeviceUid) !==
+          String(storedDeviceUid)
+      ) {
+        logUserChat(
+          "route deviceUid와 저장 deviceUid 불일치",
+          {
+            routeDeviceUid,
+            storedDeviceUid,
+          }
+        );
+      }
+
+      return String(
+        storedDeviceUid
+      ).trim();
+    } catch (error) {
+      logUserChat(
+        "인증 기기 확인 실패",
+        error?.message
+      );
+
+      return null;
+    }
   };
+
+  // =========================================================
+  // Pairing 로컬 상태 제거
+  // =========================================================
+
+  const clearPairingState = async () => {
+    try {
+      await AsyncStorage.multiRemove([
+        "deviceUid",
+        "isVerifiedUser",
+        "pairedUserId",
+      ]);
+
+      logUserChat(
+        "로컬 기기 인증 정보 초기화 완료"
+      );
+    } catch (error) {
+      logUserChat(
+        "기기 인증 정보 초기화 실패",
+        error?.message
+      );
+    }
+  };
+
+  // =========================================================
+  // 시간
+  // =========================================================
 
   const getTimeString = () => {
     const now = new Date();
-    const hh = String(now.getHours()).padStart(2, "0");
-    const mm = String(now.getMinutes()).padStart(2, "0");
+
+    const hh = String(
+      now.getHours()
+    ).padStart(2, "0");
+
+    const mm = String(
+      now.getMinutes()
+    ).padStart(2, "0");
 
     return `${hh}:${mm}`;
   };
 
   const formatTimer = (totalSeconds) => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
+    const mins = Math.floor(
+      totalSeconds / 60
+    );
 
-    return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    const secs =
+      totalSeconds % 60;
+
+    return `${String(mins).padStart(
+      2,
+      "0"
+    )}:${String(secs).padStart(
+      2,
+      "0"
+    )}`;
   };
 
   const parseServerDate = (isoString) => {
-    if (!isoString) return null;
+    if (!isoString) {
+      return null;
+    }
 
     try {
-      const stringValue = String(isoString).trim();
+      const stringValue =
+        String(isoString).trim();
 
       const hasExplicitTimezone =
-        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
+        stringValue.endsWith("Z") ||
+        /[+-]\d{2}:\d{2}$/.test(
+          stringValue
+        );
 
       if (hasExplicitTimezone) {
-        const date = new Date(stringValue);
-        return Number.isNaN(date.getTime()) ? null : date;
+        const date =
+          new Date(stringValue);
+
+        return Number.isNaN(
+          date.getTime()
+        )
+          ? null
+          : date;
       }
 
-      const normalized = stringValue.replace("T", " ");
-      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
-      const [year, month, day] = datePart.split("-").map(Number);
-      const [hour = 0, minute = 0, second = 0] = timePart
+      const normalized =
+        stringValue.replace(
+          "T",
+          " "
+        );
+
+      const [
+        datePart,
+        timePart = "00:00:00",
+      ] = normalized.split(" ");
+
+      const [year, month, day] =
+        datePart
+          .split("-")
+          .map(Number);
+
+      const [
+        hour = 0,
+        minute = 0,
+        second = 0,
+      ] = timePart
         .split(":")
-        .map((value) => Number(String(value).split(".")[0]));
+        .map((value) =>
+          Number(
+            String(value).split(
+              "."
+            )[0]
+          )
+        );
 
-      if (!year || !month || !day) return null;
+      if (
+        !year ||
+        !month ||
+        !day
+      ) {
+        return null;
+      }
 
-      return new Date(year, month - 1, day, hour, minute, second);
+      return new Date(
+        year,
+        month - 1,
+        day,
+        hour,
+        minute,
+        second
+      );
     } catch {
       return null;
     }
   };
 
   const formatBubbleTime = (isoString) => {
-    const date = parseServerDate(isoString);
+    const date =
+      parseServerDate(
+        isoString
+      );
 
-    if (!date || Number.isNaN(date.getTime())) {
+    if (
+      !date ||
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
       return getTimeString();
     }
 
-    const hh = String(date.getHours()).padStart(2, "0");
-    const mm = String(date.getMinutes()).padStart(2, "0");
+    const hh = String(
+      date.getHours()
+    ).padStart(2, "0");
+
+    const mm = String(
+      date.getMinutes()
+    ).padStart(2, "0");
 
     return `${hh}:${mm}`;
   };
 
+  // =========================================================
+  // Session helper
+  // =========================================================
+
   const getSessionId = (session) => {
-    const safeSession = session || {};
+    const safeSession =
+      session || {};
 
     return (
       safeSession.sessionId ??
@@ -176,7 +416,8 @@ export default function IntercomChatScreen() {
   };
 
   const getSessionStatus = (session) => {
-    const safeSession = session || {};
+    const safeSession =
+      session || {};
 
     return String(
       safeSession.status ||
@@ -190,7 +431,8 @@ export default function IntercomChatScreen() {
   };
 
   const hasEndedAt = (session) => {
-    const safeSession = session || {};
+    const safeSession =
+      session || {};
 
     return Boolean(
       safeSession.endedAt ||
@@ -202,44 +444,116 @@ export default function IntercomChatScreen() {
   };
 
   const isClosedSession = (session) => {
-    if (!session) return true;
+    if (!session) {
+      return true;
+    }
 
-    const status = getSessionStatus(session);
+    const status =
+      getSessionStatus(
+        session
+      );
 
-    if (CLOSED_SESSION_STATUSES.has(status)) return true;
-    if (hasEndedAt(session)) return true;
+    if (
+      CLOSED_SESSION_STATUSES.has(
+        status
+      )
+    ) {
+      return true;
+    }
+
+    if (hasEndedAt(session)) {
+      return true;
+    }
 
     return false;
   };
 
   const isActiveSession = (session) => {
-    if (!session) return false;
+    if (!session) {
+      return false;
+    }
 
-    const status = getSessionStatus(session);
+    const status =
+      getSessionStatus(
+        session
+      );
 
-    if (isClosedSession(session)) return false;
-    if (!getSessionId(session)) return false;
-    if (!status) return true;
+    if (
+      isClosedSession(session)
+    ) {
+      return false;
+    }
 
-    return ACTIVE_SESSION_STATUSES.has(status);
+    if (!getSessionId(session)) {
+      return false;
+    }
+
+    /**
+     * status가 없어도
+     * sessionId가 있고 종료정보가 없다면
+     * 진행 중으로 판단.
+     */
+    if (!status) {
+      return true;
+    }
+
+    return ACTIVE_SESSION_STATUSES.has(
+      status
+    );
   };
+
+  // =========================================================
+  // Polling 중지
+  // =========================================================
+
+  const stopMessagePolling = () => {
+    if (pollingRef.current) {
+      clearInterval(
+        pollingRef.current
+      );
+
+      pollingRef.current = null;
+
+      logUserChat(
+        "메시지 polling 중지"
+      );
+    }
+
+    pollingBusyRef.current =
+      false;
+  };
+
+  // =========================================================
+  // 메인 화면 이동
+  // =========================================================
 
   const moveToIdleMainTab = async ({
     screen = "홈",
     endedSessionId = null,
   } = {}) => {
-    await AsyncStorage.removeItem("callStartTime");
+    await AsyncStorage.removeItem(
+      "callStartTime"
+    );
 
     stopMessagePolling();
 
     if (isMountedRef.current) {
-      setCurrentSessionId(null);
+      setCurrentSessionId(
+        null
+      );
+
       setSelectedTags([]);
-      setIsOverlayVisible(false);
+
+      setIsOverlayVisible(
+        false
+      );
+
       setIsLoading(false);
     }
 
-    const parentNav = navigation.getParent() || navigation;
+    const parentNav =
+      navigation.getParent() ||
+      navigation;
 
     parentNav.setParams?.({
       intercomStatus: "idle",
@@ -247,100 +561,434 @@ export default function IntercomChatScreen() {
       sessionId: null,
     });
 
-    logUserChat("idle 상태로 MainTab 이동", {
-      screen,
-      sessionId: endedSessionId,
-    });
+    logUserChat(
+      "idle 상태로 MainTab 이동",
+      {
+        screen,
+        sessionId:
+          endedSessionId,
+      }
+    );
 
     navigation.reset({
       index: 0,
+
       routes: [
         {
           name: "MainTab",
+
           params: {
             screen,
-            refresh: Date.now(),
-            intercomStatus: "idle",
-            activeSessionId: null,
-            sessionId: null,
+            refresh:
+              Date.now(),
+
+            intercomStatus:
+              "idle",
+
+            activeSessionId:
+              null,
+
+            sessionId:
+              null,
           },
         },
       ],
     });
   };
 
-  const getFilteredReplies = (tabName) => {
-    const defaultData = {
-      인사: [
-        { replyCode: 101, text: "안녕하세요" },
-        { replyCode: 102, text: "어서오세요." },
-        { replyCode: 103, text: "안녕히가세요." },
-      ],
-      질문: [
-        { replyCode: 201, text: "누구세요?" },
-        { replyCode: 202, text: "무슨 일이세요?" },
-        { replyCode: 203, text: "이유가 무엇인가요?" },
-        { replyCode: 204, text: "방문 목적이 무엇인가요?" },
-        { replyCode: 205, text: "필요한 것이 있나요?" },
-        { replyCode: 206, text: "어느 업체에서 오셨나요?" },
-      ],
-      대답: [
-        { replyCode: 301, text: "네." },
-        { replyCode: 302, text: "아니요." },
-        { replyCode: 303, text: "맞습니다." },
-        { replyCode: 304, text: "아닙니다." },
-        { replyCode: 305, text: "알겠습니다." },
-        { replyCode: 306, text: "대화 어려워요." },
-        { replyCode: 307, text: "잘못 오셨습니다." },
-        { replyCode: 308, text: "무슨 말씀인지 안 들렸어요." },
-      ],
-      요청: [
-        { replyCode: 401, text: "용건을 말씀해주세요." },
-        { replyCode: 402, text: "자세히 말씀해주세요." },
-        { replyCode: 403, text: "다시 말씀해주세요." },
-        { replyCode: 404, text: "문 앞에 두고 가세요." },
-        { replyCode: 405, text: "다시 호출해주세요." },
-        { replyCode: 406, text: "통화 끊어주세요." },
-        { replyCode: 407, text: "다음에 방문해주세요." },
-      ],
-      행동: [
-        { replyCode: 501, text: "지금 나갈게요." },
-        { replyCode: 502, text: "통화 끊겠습니다." },
-        { replyCode: 503, text: "문 열어드릴게요." },
-        { replyCode: 504, text: "나중에 갈게요." },
-      ],
-    };
+  // =========================================================
+  // 로그인 만료 처리
+  // =========================================================
 
-    const defaultTabReplies = defaultData[tabName] || [];
-
-    if (!backendQuickReplies || backendQuickReplies.length === 0) {
-      return defaultTabReplies;
+  const handleAuthExpired = async () => {
+    if (
+      authErrorHandledRef.current
+    ) {
+      return;
     }
 
-    const normalizeText = (value) =>
-      String(value || "")
-        .replace(/\s+/g, "")
-        .trim();
+    authErrorHandledRef.current =
+      true;
 
-    return defaultTabReplies.map((defaultItem) => {
-      const matchedBackendItem = backendQuickReplies.find((backendItem) => {
-        const backendText = normalizeText(
-          backendItem.text || backendItem.content || backendItem.message
-        );
+    stopMessagePolling();
 
-        return backendText === normalizeText(defaultItem.text);
-      });
+    await AsyncStorage.removeItem(
+      "accessToken"
+    );
 
-      return {
-        ...defaultItem,
-        replyCode: matchedBackendItem
-          ? matchedBackendItem.replyCode || matchedBackendItem.id
-          : defaultItem.replyCode,
-      };
-    });
+    Alert.alert(
+      "로그인 만료",
+      "로그인 정보가 만료되었습니다. 다시 로그인해 주세요.",
+      [
+        {
+          text: "확인",
+
+          onPress: () => {
+            navigation.reset({
+              index: 0,
+
+              routes: [
+                {
+                  name:
+                    "ResidentLogin",
+                },
+              ],
+            });
+          },
+        },
+      ]
+    );
   };
 
-  const getMessageText = (message) => {
+  // =========================================================
+  // 세션 권한 / Pairing 오류
+  // =========================================================
+
+  const handlePairingPermissionError =
+    async (
+      activeToken,
+      targetSessionId
+    ) => {
+      if (
+        pairingErrorHandledRef.current
+      ) {
+        return;
+      }
+
+      pairingErrorHandledRef.current =
+        true;
+
+      stopMessagePolling();
+
+      /**
+       * 서버에서 현재 세션에 접근 권한이 없다고 판단했으므로
+       * 로컬의 페어링 정보도 더 이상 신뢰하지 않는다.
+       */
+      await clearPairingState();
+
+      const userId =
+        await AsyncStorage.getItem(
+          "userId"
+        );
+
+      logUserChat(
+        "세션 접근 권한 없음 - QR 재인증 필요",
+        {
+          sessionId:
+            targetSessionId,
+          userId,
+        }
+      );
+
+      Alert.alert(
+        "기기 재인증 필요",
+        "현재 인터폰 기기에 대한 접근 권한을 확인할 수 없습니다. QR 인증을 다시 진행해 주세요.",
+        [
+          {
+            text: "QR 인증",
+
+            onPress: () => {
+              navigation.reset({
+                index: 0,
+
+                routes: [
+                  {
+                    name:
+                      "QrVerify",
+
+                    params: {
+                      token:
+                        activeToken,
+
+                      userId,
+                    },
+                  },
+                ],
+              });
+            },
+          },
+        ]
+      );
+    };
+
+  // =========================================================
+  // 빠른 응답
+  // =========================================================
+
+  const DEFAULT_QUICK_REPLIES = {
+    인사: [
+      {
+        replyCode: 101,
+        text: "안녕하세요",
+      },
+      {
+        replyCode: 102,
+        text: "어서오세요.",
+      },
+      {
+        replyCode: 103,
+        text: "안녕히가세요.",
+      },
+    ],
+
+    질문: [
+      {
+        replyCode: 201,
+        text: "누구세요?",
+      },
+      {
+        replyCode: 202,
+        text: "무슨 일이세요?",
+      },
+      {
+        replyCode: 203,
+        text: "이유가 무엇인가요?",
+      },
+      {
+        replyCode: 204,
+        text: "방문 목적이 무엇인가요?",
+      },
+      {
+        replyCode: 205,
+        text: "필요한 것이 있나요?",
+      },
+      {
+        replyCode: 206,
+        text: "어느 업체에서 오셨나요?",
+      },
+    ],
+
+    대답: [
+      {
+        replyCode: 301,
+        text: "네.",
+      },
+      {
+        replyCode: 302,
+        text: "아니요.",
+      },
+      {
+        replyCode: 303,
+        text: "맞습니다.",
+      },
+      {
+        replyCode: 304,
+        text: "아닙니다.",
+      },
+      {
+        replyCode: 305,
+        text: "알겠습니다.",
+      },
+      {
+        replyCode: 306,
+        text: "대화 어려워요.",
+      },
+      {
+        replyCode: 307,
+        text: "잘못 오셨습니다.",
+      },
+      {
+        replyCode: 308,
+        text: "무슨 말씀인지 안 들렸어요.",
+      },
+    ],
+
+    요청: [
+      {
+        replyCode: 401,
+        text: "용건을 말씀해주세요.",
+      },
+      {
+        replyCode: 402,
+        text: "자세히 말씀해주세요.",
+      },
+      {
+        replyCode: 403,
+        text: "다시 말씀해주세요.",
+      },
+      {
+        replyCode: 404,
+        text: "문 앞에 두고 가세요.",
+      },
+      {
+        replyCode: 405,
+        text: "다시 호출해주세요.",
+      },
+      {
+        replyCode: 406,
+        text: "통화 끊어주세요.",
+      },
+      {
+        replyCode: 407,
+        text: "다음에 방문해주세요.",
+      },
+    ],
+
+    행동: [
+      {
+        replyCode: 501,
+        text: "지금 나갈게요.",
+      },
+      {
+        replyCode: 502,
+        text: "통화 끊겠습니다.",
+      },
+      {
+        replyCode: 503,
+        text: "문 열어드릴게요.",
+      },
+      {
+        replyCode: 504,
+        text: "나중에 갈게요.",
+      },
+    ],
+  };
+
+  const getQuickReplyText = (
+    item = {}
+  ) => {
+    return String(
+      item.text ||
+        item.content ||
+        item.message ||
+        item.replyText ||
+        ""
+    ).trim();
+  };
+
+  /**
+   * replyCode 기준으로 탭 분류
+   *
+   * 100번대 → 인사
+   * 200번대 → 질문
+   * 300번대 → 대답
+   * 400번대 → 요청
+   * 500번대 → 행동
+   */
+  const getReplyTabByCode = (
+    replyCode
+  ) => {
+    const code =
+      Number(replyCode);
+
+    if (
+      code >= 100 &&
+      code < 200
+    ) {
+      return "인사";
+    }
+
+    if (
+      code >= 200 &&
+      code < 300
+    ) {
+      return "질문";
+    }
+
+    if (
+      code >= 300 &&
+      code < 400
+    ) {
+      return "대답";
+    }
+
+    if (
+      code >= 400 &&
+      code < 500
+    ) {
+      return "요청";
+    }
+
+    if (
+      code >= 500 &&
+      code < 600
+    ) {
+      return "행동";
+    }
+
+    return null;
+  };
+
+  const getFilteredReplies = (
+    tabName
+  ) => {
+    /**
+     * 백엔드 데이터가 없으면
+     * 기존 기본 버튼 사용.
+     */
+    if (
+      !Array.isArray(
+        backendQuickReplies
+      ) ||
+      backendQuickReplies.length ===
+        0
+    ) {
+      return (
+        DEFAULT_QUICK_REPLIES[
+          tabName
+        ] || []
+      );
+    }
+
+    const serverReplies =
+      backendQuickReplies
+        .map((item) => {
+          const replyCode =
+            item.replyCode ??
+            item.code ??
+            item.id;
+
+          return {
+            ...item,
+
+            replyCode:
+              Number(replyCode),
+
+            text:
+              getQuickReplyText(
+                item
+              ),
+          };
+        })
+        .filter((item) => {
+          if (
+            !item.replyCode ||
+            !item.text
+          ) {
+            return false;
+          }
+
+          return (
+            getReplyTabByCode(
+              item.replyCode
+            ) === tabName
+          );
+        });
+
+    /**
+     * 서버에 해당 탭 데이터가 없으면
+     * 기본값 fallback
+     */
+    if (
+      serverReplies.length === 0
+    ) {
+      return (
+        DEFAULT_QUICK_REPLIES[
+          tabName
+        ] || []
+      );
+    }
+
+    return serverReplies;
+  };
+
+  // =========================================================
+  // 메시지
+  // =========================================================
+
+  const getMessageText = (
+    message
+  ) => {
     return (
       message.content ||
       message.messageText ||
@@ -351,891 +999,2401 @@ export default function IntercomChatScreen() {
     );
   };
 
-  const getMessageType = (message) => {
-    const senderValue = String(
-      message.senderType || message.sender || message.role || message.type || ""
-    ).toUpperCase();
+  const getMessageType = (
+    message
+  ) => {
+    const senderValue =
+      String(
+        message.senderType ||
+          message.sender ||
+          message.role ||
+          message.type ||
+          ""
+      ).toUpperCase();
 
     if (
-      senderValue === "VISITOR" ||
-      senderValue === "INCOMING" ||
-      senderValue === "RECEIVE"
+      senderValue ===
+        "VISITOR" ||
+      senderValue ===
+        "INCOMING" ||
+      senderValue ===
+        "RECEIVE"
     ) {
       return "receive";
     }
 
     if (
-      senderValue === "RESIDENT" ||
+      senderValue ===
+        "RESIDENT" ||
       senderValue === "USER" ||
-      senderValue === "SEND" ||
-      senderValue === "OUTGOING"
+      senderValue ===
+        "SEND" ||
+      senderValue ===
+        "OUTGOING"
     ) {
       return "send";
     }
 
-    if (senderValue === "SYSTEM") {
+    if (
+      senderValue ===
+      "SYSTEM"
+    ) {
       return "system";
     }
 
     return "receive";
   };
 
-  const isHiddenMessageText = (text) => {
-    const safeText = String(text || "").trim();
+  const isHiddenMessageText = (
+    text
+  ) => {
+    const safeText =
+      String(
+        text || ""
+      ).trim();
 
     return (
       !safeText ||
-      safeText === "실시간 자막 변환 중..." ||
-      safeText === "실시간 자막 변환 중" ||
-      safeText === "실시간 자막 확인 중..." ||
-      safeText === "실시간 자막 확인 중" ||
-      safeText === "자막 내용 없음"
+      safeText ===
+        "실시간 자막 변환 중..." ||
+      safeText ===
+        "실시간 자막 변환 중" ||
+      safeText ===
+        "실시간 자막 확인 중..." ||
+      safeText ===
+        "실시간 자막 확인 중" ||
+      safeText ===
+        "자막 내용 없음"
     );
   };
 
-  const normalizeMessages = (rawMessages = []) => {
-    if (!Array.isArray(rawMessages)) return [];
+  const normalizeMessages = (
+    rawMessages = []
+  ) => {
+    if (
+      !Array.isArray(rawMessages)
+    ) {
+      return [];
+    }
 
-    const uniqueMap = new Map();
+    const uniqueMap =
+      new Map();
 
-    rawMessages.forEach((message, index) => {
-      const text = String(getMessageText(message)).trim();
+    rawMessages.forEach(
+      (message, index) => {
+        const text =
+          String(
+            getMessageText(
+              message
+            )
+          ).trim();
 
-      if (isHiddenMessageText(text)) return;
+        if (
+          isHiddenMessageText(
+            text
+          )
+        ) {
+          return;
+        }
 
-      const createdAt = message.createdAt || message.time || "";
-      const type = getMessageType(message);
+        const createdAt =
+          message.createdAt ||
+          message.time ||
+          "";
 
-      const id =
-        message.messageId ??
-        message.id ??
-        message.transcriptId ??
-        message.chunkOrder ??
-        `${type}-${createdAt}-${text}-${index}`;
+        const type =
+          getMessageType(
+            message
+          );
 
-      const dedupeKey =
-        message.messageId ?? message.id ?? `${type}-${createdAt}-${text}`;
+        const id =
+          message.messageId ??
+          message.id ??
+          message.transcriptId ??
+          message.chunkOrder ??
+          `${type}-${createdAt}-${text}-${index}`;
 
-      if (uniqueMap.has(dedupeKey)) {
+        /**
+         * 백엔드 messageId가 있으면 그 값을 우선 사용.
+         *
+         * 백엔드에서 같은 메시지를 여러 번 돌려줘도
+         * 최대한 중복 제거.
+         */
+        const dedupeKey =
+          message.messageId ??
+          message.id ??
+          `${type}-${createdAt}-${text}`;
+
+        if (
+          uniqueMap.has(
+            dedupeKey
+          )
+        ) {
+          return;
+        }
+
+        uniqueMap.set(
+          dedupeKey,
+          {
+            id:
+              String(id),
+
+            text,
+
+            type,
+
+            time:
+              formatBubbleTime(
+                createdAt
+              ),
+
+            createdAt,
+          }
+        );
+      }
+    );
+
+    return Array.from(
+      uniqueMap.values()
+    );
+  };
+
+  const logMessageUpdateIfChanged = (
+    targetSessionId,
+    nextMessages
+  ) => {
+    const signature =
+      nextMessages
+        .map(
+          (item) =>
+            `${item.id}:${item.type}:${item.text}`
+        )
+        .join("|");
+
+    if (
+      lastMessageSignatureRef.current ===
+      signature
+    ) {
+      return;
+    }
+
+    lastMessageSignatureRef.current =
+      signature;
+
+    const lastMessage =
+      nextMessages[
+        nextMessages.length - 1
+      ];
+
+    logUserChat(
+      "메시지 갱신",
+      {
+        sessionId:
+          targetSessionId,
+
+        count:
+          nextMessages.length,
+
+        lastType:
+          lastMessage?.type ||
+          null,
+
+        lastText:
+          lastMessage?.text ||
+          null,
+      }
+    );
+  };
+
+  // =========================================================
+  // 현재 세션 조회
+  // =========================================================
+
+  const fetchCurrentSession =
+    async (
+      activeToken,
+      deviceUid
+    ) => {
+      if (!activeToken) {
+        return null;
+      }
+
+      if (!deviceUid) {
+        return null;
+      }
+
+      try {
+        logUserChat(
+          "현재 세션 확인 요청",
+          {
+            deviceUid,
+          }
+        );
+
+        const response =
+          await axios.get(
+            `${BASE_URL}/api/sessions/current`,
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+              },
+
+              params: {
+                deviceUid,
+              },
+
+              timeout: 10000,
+            }
+          );
+
+        const sessionData =
+          response.data
+            ?.success
+            ? response.data
+                ?.data || null
+            : null;
+
+        logUserChat(
+          "현재 세션 확인 응답",
+          {
+            success:
+              response.data
+                ?.success ||
+              false,
+
+            sessionId:
+              getSessionId(
+                sessionData
+              ),
+
+            status:
+              getSessionStatus(
+                sessionData
+              ),
+
+            ended:
+              hasEndedAt(
+                sessionData
+              ),
+
+            raw:
+              sessionData,
+          }
+        );
+
+        return sessionData;
+      } catch (error) {
+        const status =
+          error.response
+            ?.status;
+
+        const serverError =
+          error.response?.data
+            ?.message ||
+          JSON.stringify(
+            error.response?.data
+          ) ||
+          error.message;
+
+        logUserChat(
+          "현재 세션 확인 실패",
+          {
+            status,
+            error:
+              serverError,
+          }
+        );
+
+        if (
+          status === 401 ||
+          status === 403
+        ) {
+          await handleAuthExpired();
+        }
+
+        return null;
+      }
+    };
+
+  // =========================================================
+  // 세션 연결 처리
+  // POST /api/sessions/{sessionId}/connect
+  // =========================================================
+
+  const connectCurrentSession =
+    async (
+      targetSessionId,
+      activeToken
+    ) => {
+      if (
+        !targetSessionId ||
+        !activeToken
+      ) {
+        return false;
+      }
+
+      try {
+        logUserChat(
+          "통화 연결 요청",
+          {
+            sessionId:
+              targetSessionId,
+          }
+        );
+
+        const response =
+          await axios.post(
+            `${BASE_URL}/api/sessions/${targetSessionId}/connect`,
+            {},
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+
+                "Content-Type":
+                  "application/json",
+              },
+
+              timeout: 10000,
+            }
+          );
+
+        logUserChat(
+          "통화 연결 응답",
+          {
+            sessionId:
+              targetSessionId,
+
+            status:
+              response.status,
+
+            data:
+              response.data,
+          }
+        );
+
+        return (
+          response.data
+            ?.success !== false
+        );
+      } catch (error) {
+        const status =
+          error.response
+            ?.status;
+
+        const serverMessage =
+          error.response?.data
+            ?.message ||
+          error.response?.data
+            ?.error ||
+          error.message;
+
+        logUserChat(
+          "통화 연결 요청 실패",
+          {
+            sessionId:
+              targetSessionId,
+
+            status,
+
+            error:
+              serverMessage,
+          }
+        );
+
+        if (
+          status === 401 ||
+          status === 403
+        ) {
+          await handleAuthExpired();
+
+          return false;
+        }
+
+        if (
+          status === 400 &&
+          String(
+            serverMessage
+          ).includes("권한")
+        ) {
+          await handlePairingPermissionError(
+            activeToken,
+            targetSessionId
+          );
+
+          return false;
+        }
+
+        /**
+         * 404 / 409 / 410이면
+         * 이미 종료되었거나 연결 불가능한 세션으로 판단.
+         */
+        if (
+          status === 404 ||
+          status === 409 ||
+          status === 410
+        ) {
+          return false;
+        }
+
+        /**
+         * connect API만 일시적으로 실패했다고
+         * 전체 통화를 막지는 않는다.
+         *
+         * 메시지 API에서 다시 실제 상태를 확인한다.
+         */
+        return true;
+      }
+    };
+
+  // =========================================================
+  // 세션 메시지 조회
+  // =========================================================
+
+  const fetchSessionMessages =
+    async ({
+      targetSessionId,
+      activeToken,
+      shouldVibrate = false,
+    }) => {
+      if (
+        !targetSessionId ||
+        !activeToken
+      ) {
+        logUserChat(
+          "메시지 조회 생략",
+          {
+            hasSessionId:
+              Boolean(
+                targetSessionId
+              ),
+
+            hasToken:
+              Boolean(
+                activeToken
+              ),
+          }
+        );
+
         return;
       }
 
-      uniqueMap.set(dedupeKey, {
-        id: String(id),
-        text,
-        type,
-        time: formatBubbleTime(createdAt),
-        createdAt,
-      });
-    });
+      if (
+        isEndingRef.current
+      ) {
+        return;
+      }
 
-    return Array.from(uniqueMap.values());
-  };
+      /**
+       * 이전 polling 요청이 아직 안 끝났다면
+       * 새 요청 중복 실행하지 않음.
+       */
+      if (
+        pollingBusyRef.current
+      ) {
+        return;
+      }
 
-  const logMessageUpdateIfChanged = (targetSessionId, nextMessages) => {
-    const signature = nextMessages
-      .map((item) => `${item.id}:${item.type}:${item.text}`)
-      .join("|");
+      pollingBusyRef.current =
+        true;
 
-    if (lastMessageSignatureRef.current === signature) {
-      return;
-    }
+      try {
+        const response =
+          await axios.get(
+            `${BASE_URL}/api/sessions/${targetSessionId}/messages`,
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+              },
 
-    lastMessageSignatureRef.current = signature;
-
-    const lastMessage = nextMessages[nextMessages.length - 1];
-
-    logUserChat("메시지 갱신", {
-      sessionId: targetSessionId,
-      count: nextMessages.length,
-      lastType: lastMessage?.type || null,
-      lastText: lastMessage?.text || null,
-    });
-  };
-
-  const fetchCurrentSession = async (activeToken) => {
-    if (!activeToken) return null;
-
-    try {
-      const deviceUid = await getResolvedDeviceUid();
-
-      logUserChat("현재 세션 확인 요청", {
-        deviceUid,
-      });
-
-      const response = await axios.get(`${BASE_URL}/api/sessions/current`, {
-        headers: {
-          Authorization: `Bearer ${activeToken}`,
-        },
-        params: {
-          deviceUid,
-        },
-      });
-
-      const sessionData = response.data?.success
-        ? response.data?.data || null
-        : null;
-
-      logUserChat("현재 세션 확인 응답", {
-        success: response.data?.success || false,
-        sessionId: getSessionId(sessionData),
-        status: getSessionStatus(sessionData),
-        ended: hasEndedAt(sessionData),
-        raw: sessionData,
-      });
-
-      return sessionData;
-    } catch (error) {
-      const serverError =
-        error.response?.data?.message ||
-        JSON.stringify(error.response?.data) ||
-        error.message;
-
-      logUserChat("현재 세션 확인 실패", serverError);
-
-      return null;
-    }
-  };
-
-  const fetchSessionMessages = async ({
-    targetSessionId,
-    activeToken,
-    shouldVibrate = false,
-  }) => {
-    if (!targetSessionId || !activeToken) {
-      logUserChat("메시지 조회 생략", {
-        hasSessionId: Boolean(targetSessionId),
-        hasToken: Boolean(activeToken),
-      });
-      return;
-    }
-
-    if (isEndingRef.current) return;
-
-    try {
-      const response = await axios.get(
-        `${BASE_URL}/api/sessions/${targetSessionId}/messages`,
-        {
-          headers: {
-            Authorization: `Bearer ${activeToken}`,
-          },
-        }
-      );
-
-      if (response.data?.success && Array.isArray(response.data?.data)) {
-        const nextMessages = normalizeMessages(response.data.data);
-
-        const lastVisitorMessage = [...nextMessages]
-          .reverse()
-          .find((item) => item.type === "receive");
-
-        const nextVisitorKey = lastVisitorMessage
-          ? `${lastVisitorMessage.createdAt}-${lastVisitorMessage.text}`
-          : null;
-
-        if (
-          shouldVibrate &&
-          nextVisitorKey &&
-          lastVisitorMessageKeyRef.current !== nextVisitorKey
-        ) {
-          const subtitleVibSetting = await AsyncStorage.getItem(
-            "subtitleVibrate"
+              timeout: 10000,
+            }
           );
 
-          if (subtitleVibSetting === "true") {
-            Vibration.vibrate(400);
+        if (
+          response.data
+            ?.success &&
+          Array.isArray(
+            response.data?.data
+          )
+        ) {
+          const nextMessages =
+            normalizeMessages(
+              response.data.data
+            );
 
-            logUserChat("방문자 새 메시지 진동 실행", {
-              sessionId: targetSessionId,
-            });
+          const lastVisitorMessage =
+            [
+              ...nextMessages,
+            ]
+              .reverse()
+              .find(
+                (item) =>
+                  item.type ===
+                  "receive"
+              );
+
+          const nextVisitorKey =
+            lastVisitorMessage
+              ? `${lastVisitorMessage.createdAt}-${lastVisitorMessage.text}`
+              : null;
+
+          if (
+            shouldVibrate &&
+            nextVisitorKey &&
+            lastVisitorMessageKeyRef.current !==
+              nextVisitorKey
+          ) {
+            const subtitleVibSetting =
+              await AsyncStorage.getItem(
+                "subtitleVibrate"
+              );
+
+            if (
+              subtitleVibSetting ===
+              "true"
+            ) {
+              Vibration.vibrate(
+                400
+              );
+
+              logUserChat(
+                "방문자 새 메시지 진동 실행",
+                {
+                  sessionId:
+                    targetSessionId,
+                }
+              );
+            }
+          }
+
+          if (
+            nextVisitorKey
+          ) {
+            lastVisitorMessageKeyRef.current =
+              nextVisitorKey;
+          }
+
+          logMessageUpdateIfChanged(
+            targetSessionId,
+            nextMessages
+          );
+
+          if (
+            isMountedRef.current
+          ) {
+            setMessages(
+              nextMessages
+            );
+          }
+        } else {
+          logUserChat(
+            "메시지 조회 응답 확인 필요",
+            response.data
+          );
+        }
+      } catch (error) {
+        const serverStatus =
+          error.response
+            ?.status;
+
+        const serverError =
+          error.response?.data
+            ?.message ||
+          error.response?.data
+            ?.error ||
+          JSON.stringify(
+            error.response?.data
+          ) ||
+          error.message;
+
+        logUserChat(
+          "세션 메시지 조회 실패",
+          {
+            sessionId:
+              targetSessionId,
+
+            status:
+              serverStatus,
+
+            error:
+              serverError,
+          }
+        );
+
+        // =============================================
+        // 로그인 인증 오류
+        // =============================================
+
+        if (
+          serverStatus === 401 ||
+          serverStatus === 403
+        ) {
+          stopMessagePolling();
+
+          await handleAuthExpired();
+
+          return;
+        }
+
+        // =============================================
+        // ★ 이전에 네가 받았던 오류
+        //
+        // HTTP 400
+        // 해당 세션에 대한 권한이 없습니다.
+        // =============================================
+
+        if (
+          serverStatus === 400
+        ) {
+          stopMessagePolling();
+
+          const isPermissionError =
+            String(
+              serverError || ""
+            ).includes(
+              "권한"
+            );
+
+          if (
+            isPermissionError
+          ) {
+            await handlePairingPermissionError(
+              activeToken,
+              targetSessionId
+            );
+
+            return;
+          }
+
+          /**
+           * 다른 종류의 잘못된 요청이라도
+           * 1.5초마다 무한 반복하지 않음.
+           */
+          Alert.alert(
+            "통화 정보 오류",
+            serverError ||
+              "통화 정보를 확인할 수 없습니다.",
+            [
+              {
+                text: "확인",
+
+                onPress: () =>
+                  moveToIdleMainTab(
+                    {
+                      screen:
+                        "홈",
+
+                      endedSessionId:
+                        targetSessionId,
+                    }
+                  ),
+              },
+            ]
+          );
+
+          return;
+        }
+
+        // =============================================
+        // 이미 종료된 세션
+        // =============================================
+
+        if (
+          serverStatus === 404 ||
+          serverStatus === 409 ||
+          serverStatus === 410
+        ) {
+          stopMessagePolling();
+
+          if (
+            !isEndingRef.current
+          ) {
+            Alert.alert(
+              "안내",
+              "종료된 통화입니다.",
+              [
+                {
+                  text:
+                    "확인",
+
+                  onPress: () =>
+                    moveToIdleMainTab(
+                      {
+                        screen:
+                          "히스토리",
+
+                        endedSessionId:
+                          targetSessionId,
+                      }
+                    ),
+                },
+              ]
+            );
           }
         }
-
-        if (nextVisitorKey) {
-          lastVisitorMessageKeyRef.current = nextVisitorKey;
-        }
-
-        logMessageUpdateIfChanged(targetSessionId, nextMessages);
-
-        if (isMountedRef.current) {
-          setMessages(nextMessages);
-        }
-      } else {
-        logUserChat("메시지 조회 응답 확인 필요", response.data);
+      } finally {
+        pollingBusyRef.current =
+          false;
       }
-    } catch (error) {
-      const serverStatus = error.response?.status;
-      const serverError =
-        error.response?.data?.message ||
-        JSON.stringify(error.response?.data) ||
-        error.message;
+    };
 
-      logUserChat("세션 메시지 조회 실패", {
-        sessionId: targetSessionId,
-        status: serverStatus,
-        error: serverError,
-      });
+  // =========================================================
+  // 메시지 polling
+  // =========================================================
 
-      if (serverStatus === 404 || serverStatus === 410) {
-        stopMessagePolling();
+  const startMessagePolling = (
+    targetSessionId,
+    activeToken
+  ) => {
+    stopMessagePolling();
 
-        if (!isEndingRef.current) {
-          Alert.alert("안내", "종료된 통화입니다.", [
-            {
-              text: "확인",
-              onPress: () =>
-                moveToIdleMainTab({
-                  screen: "히스토리",
-                  endedSessionId: targetSessionId,
-                }),
-            },
-          ]);
-        }
-      }
-    }
-  };
-
-  const startMessagePolling = (targetSessionId, activeToken) => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-
-    if (!targetSessionId || !activeToken) {
+    if (
+      !targetSessionId ||
+      !activeToken
+    ) {
       return;
     }
 
-    lastMessageSignatureRef.current = null;
-    lastVisitorMessageKeyRef.current = null;
+    lastMessageSignatureRef.current =
+      null;
 
-    logUserChat("메시지 polling 시작", {
-      sessionId: targetSessionId,
-      intervalMs: 1500,
-    });
+    lastVisitorMessageKeyRef.current =
+      null;
 
+    pairingErrorHandledRef.current =
+      false;
+
+    logUserChat(
+      "메시지 polling 시작",
+      {
+        sessionId:
+          targetSessionId,
+
+        intervalMs:
+          1500,
+      }
+    );
+
+    /**
+     * 최초 즉시 조회
+     */
     fetchSessionMessages({
       targetSessionId,
       activeToken,
       shouldVibrate: false,
     });
 
-    pollingRef.current = setInterval(() => {
-      fetchSessionMessages({
-        targetSessionId,
-        activeToken,
-        shouldVibrate: true,
-      });
-    }, 1500);
+    /**
+     * 이후 1.5초 간격
+     */
+    pollingRef.current =
+      setInterval(() => {
+        fetchSessionMessages({
+          targetSessionId,
+          activeToken,
+          shouldVibrate:
+            true,
+        });
+      }, 1500);
   };
 
-  const stopMessagePolling = () => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-      logUserChat("메시지 polling 중지");
-    }
-  };
+  // =========================================================
+  // Mount / Unmount
+  // =========================================================
 
   useEffect(() => {
-    isMountedRef.current = true;
+    isMountedRef.current =
+      true;
 
     return () => {
-      isMountedRef.current = false;
+      isMountedRef.current =
+        false;
+
+      stopMessagePolling();
+
+      Vibration.cancel();
     };
   }, []);
 
-  useEffect(() => {
-    if (routeDeviceUid) {
-      AsyncStorage.setItem("deviceUid", String(routeDeviceUid)).catch(
-        (error) => {
-          logUserChat("route deviceUid 저장 실패", error?.message);
-        }
-      );
-    }
-  }, [routeDeviceUid]);
+  // =========================================================
+  // 타이머
+  // =========================================================
 
   useEffect(() => {
-    logUserChat("화면 진입", {
-      routeSessionId,
-      routeActiveSessionId,
-      initialSessionId,
-      routeDeviceUid,
-      hasRouteToken: Boolean(routeToken),
-    });
+    logUserChat(
+      "화면 진입",
+      {
+        routeSessionId,
+        routeActiveSessionId,
+        initialSessionId,
+        routeDeviceUid,
 
-    const restoreTimer = async () => {
-      try {
-        const startTime = await AsyncStorage.getItem("callStartTime");
-
-        if (startTime) {
-          const elapsed = Math.floor((Date.now() - Number(startTime)) / 1000);
-
-          if (isMountedRef.current) {
-            setSeconds(elapsed >= 0 ? elapsed : 0);
-          }
-
-          logUserChat("타이머 복구", {
-            elapsedSeconds: elapsed >= 0 ? elapsed : 0,
-          });
-        } else {
-          await AsyncStorage.setItem("callStartTime", Date.now().toString());
-          logUserChat("타이머 새로 시작");
-        }
-      } catch (error) {
-        logUserChat("타이머 복구 실패", error?.message);
-      }
-    };
-
-    restoreTimer();
-
-    const timer = setInterval(() => {
-      if (isMountedRef.current && !isEndingRef.current) {
-        setSeconds((prev) => prev + 1);
-      }
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    const backHandler = BackHandler.addEventListener(
-      "hardwareBackPress",
-      () => {
-        if (isEndingRef.current) return true;
-
-        logUserChat("Android 뒤로가기 감지 - 종료 모달 표시");
-        setIsOverlayVisible(true);
-
-        return true;
+        hasRouteToken:
+          Boolean(
+            routeToken
+          ),
       }
     );
 
-    return () => backHandler.remove();
+    const restoreTimer =
+      async () => {
+        try {
+          const startTime =
+            await AsyncStorage.getItem(
+              "callStartTime"
+            );
+
+          if (startTime) {
+            const elapsed =
+              Math.floor(
+                (Date.now() -
+                  Number(
+                    startTime
+                  )) /
+                  1000
+              );
+
+            if (
+              isMountedRef.current
+            ) {
+              setSeconds(
+                elapsed >= 0
+                  ? elapsed
+                  : 0
+              );
+            }
+
+            logUserChat(
+              "타이머 복구",
+              {
+                elapsedSeconds:
+                  elapsed >= 0
+                    ? elapsed
+                    : 0,
+              }
+            );
+          } else {
+            await AsyncStorage.setItem(
+              "callStartTime",
+              Date.now().toString()
+            );
+
+            logUserChat(
+              "타이머 새로 시작"
+            );
+          }
+        } catch (error) {
+          logUserChat(
+            "타이머 복구 실패",
+            error?.message
+          );
+        }
+      };
+
+    restoreTimer();
+
+    const timer =
+      setInterval(() => {
+        if (
+          isMountedRef.current &&
+          !isEndingRef.current
+        ) {
+          setSeconds(
+            (prev) =>
+              prev + 1
+          );
+        }
+      }, 1000);
+
+    return () =>
+      clearInterval(
+        timer
+      );
   }, []);
 
+  // =========================================================
+  // Android 뒤로가기
+  // =========================================================
+
   useEffect(() => {
-    let isCancelled = false;
+    const backHandler =
+      BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => {
+          if (
+            isEndingRef.current
+          ) {
+            return true;
+          }
 
-    const initializeChatRoom = async () => {
-      try {
-        setIsLoading(true);
-        stopMessagePolling();
+          logUserChat(
+            "Android 뒤로가기 감지 - 종료 모달 표시"
+          );
 
-        const savedToken = await AsyncStorage.getItem("accessToken");
-        const activeToken = savedToken || routeToken || null;
+          setIsOverlayVisible(
+            true
+          );
 
-        logUserChat("초기화 시작", {
-          hasSavedToken: Boolean(savedToken),
-          hasRouteToken: Boolean(routeToken),
-          activeSessionId: initialSessionId,
-        });
-
-        if (!isCancelled && isMountedRef.current) {
-          setToken(activeToken);
+          return true;
         }
+      );
 
+    return () =>
+      backHandler.remove();
+  }, []);
+
+  // =========================================================
+  // Chat 초기화
+  // =========================================================
+
+  useEffect(() => {
+    let isCancelled =
+      false;
+
+    const initializeChatRoom =
+      async () => {
         try {
-          const repliesRes = await axios.get(`${BASE_URL}/api/quick-replies`);
+          setIsLoading(
+            true
+          );
+
+          stopMessagePolling();
+
+          pairingErrorHandledRef.current =
+            false;
+
+          authErrorHandledRef.current =
+            false;
+
+          const savedToken =
+            await AsyncStorage.getItem(
+              "accessToken"
+            );
+
+          const activeToken =
+            savedToken ||
+            routeToken ||
+            null;
+
+          logUserChat(
+            "초기화 시작",
+            {
+              hasSavedToken:
+                Boolean(
+                  savedToken
+                ),
+
+              hasRouteToken:
+                Boolean(
+                  routeToken
+                ),
+
+              activeSessionId:
+                initialSessionId,
+            }
+          );
 
           if (
-            repliesRes.data?.success &&
-            repliesRes.data?.data &&
             !isCancelled &&
             isMountedRef.current
           ) {
-            setBackendQuickReplies(repliesRes.data.data);
-
-            logUserChat("빠른 응답 목록 조회 완료", {
-              count: repliesRes.data.data.length,
-            });
+            setToken(
+              activeToken
+            );
           }
+
+          // =============================================
+          // 로그인 확인
+          // =============================================
+
+          if (!activeToken) {
+            logUserChat(
+              "초기화 중단 - accessToken 없음"
+            );
+
+            Alert.alert(
+              "오류",
+              "로그인이 필요합니다.",
+              [
+                {
+                  text:
+                    "확인",
+
+                  onPress:
+                    () => {
+                      navigation.reset(
+                        {
+                          index: 0,
+
+                          routes:
+                            [
+                              {
+                                name:
+                                  "ResidentLogin",
+                              },
+                            ],
+                        }
+                      );
+                    },
+                },
+              ]
+            );
+
+            return;
+          }
+
+          // =============================================
+          // QR 인증 기기 확인
+          // =============================================
+
+          const deviceUid =
+            await getVerifiedDeviceUid();
+
+          if (!deviceUid) {
+            logUserChat(
+              "초기화 중단 - 인증된 deviceUid 없음"
+            );
+
+            const userId =
+              await AsyncStorage.getItem(
+                "userId"
+              );
+
+            Alert.alert(
+              "기기 인증 필요",
+              "인터폰 기기 인증이 필요합니다.",
+              [
+                {
+                  text:
+                    "QR 인증",
+
+                  onPress:
+                    () => {
+                      navigation.reset(
+                        {
+                          index: 0,
+
+                          routes:
+                            [
+                              {
+                                name:
+                                  "QrVerify",
+
+                                params:
+                                  {
+                                    token:
+                                      activeToken,
+
+                                    userId,
+                                  },
+                              },
+                            ],
+                        }
+                      );
+                    },
+                },
+              ]
+            );
+
+            return;
+          }
+
+          // =============================================
+          // 빠른응답 목록
+          // =============================================
+
+          try {
+            const repliesRes =
+              await axios.get(
+                `${BASE_URL}/api/quick-replies`,
+                {
+                  headers: {
+                    Authorization:
+                      `Bearer ${activeToken}`,
+                  },
+
+                  timeout: 10000,
+                }
+              );
+
+            if (
+              repliesRes.data
+                ?.success &&
+              Array.isArray(
+                repliesRes.data
+                  ?.data
+              ) &&
+              !isCancelled &&
+              isMountedRef.current
+            ) {
+              setBackendQuickReplies(
+                repliesRes.data
+                  .data
+              );
+
+              logUserChat(
+                "빠른 응답 목록 조회 완료",
+                {
+                  count:
+                    repliesRes
+                      .data.data
+                      .length,
+                }
+              );
+            }
+          } catch (error) {
+            logUserChat(
+              "빠른 응답 목록 조회 실패 - 기본 목록 사용",
+              error?.message
+            );
+          }
+
+          // =============================================
+          // sessionId 확인
+          // =============================================
+
+          if (!initialSessionId) {
+            logUserChat(
+              "초기화 중단 - sessionId 없음"
+            );
+
+            Alert.alert(
+              "안내",
+              "현재 연결된 인터폰 통화가 없습니다.",
+              [
+                {
+                  text:
+                    "확인",
+
+                  onPress:
+                    () =>
+                      moveToIdleMainTab(
+                        {
+                          screen:
+                            "홈",
+                        }
+                      ),
+                },
+              ]
+            );
+
+            return;
+          }
+
+          // =============================================
+          // 현재 세션 재검증
+          // =============================================
+
+          const currentSession =
+            await fetchCurrentSession(
+              activeToken,
+              deviceUid
+            );
+
+          if (
+            pairingErrorHandledRef.current ||
+            authErrorHandledRef.current
+          ) {
+            return;
+          }
+
+          const currentOpenSessionId =
+            getSessionId(
+              currentSession
+            );
+
+          if (
+            !currentSession ||
+            isClosedSession(
+              currentSession
+            ) ||
+            !isActiveSession(
+              currentSession
+            ) ||
+            String(
+              currentOpenSessionId
+            ) !==
+              String(
+                initialSessionId
+              )
+          ) {
+            logUserChat(
+              "초기화 중단 - 현재 활성 세션 아님",
+              {
+                routeSessionId:
+                  initialSessionId,
+
+                currentSessionId:
+                  currentOpenSessionId,
+
+                currentStatus:
+                  getSessionStatus(
+                    currentSession
+                  ),
+
+                hasEndedAt:
+                  hasEndedAt(
+                    currentSession
+                  ),
+              }
+            );
+
+            Alert.alert(
+              "안내",
+              "이미 종료된 통화입니다.",
+              [
+                {
+                  text:
+                    "확인",
+
+                  onPress:
+                    () =>
+                      moveToIdleMainTab(
+                        {
+                          screen:
+                            "히스토리",
+
+                          endedSessionId:
+                            initialSessionId,
+                        }
+                      ),
+                },
+              ]
+            );
+
+            return;
+          }
+
+          if (
+            !isCancelled &&
+            isMountedRef.current
+          ) {
+            setCurrentSessionId(
+              initialSessionId
+            );
+
+            setMessages([]);
+          }
+
+          logUserChat(
+            "기존 활성 세션 사용",
+            {
+              sessionId:
+                initialSessionId,
+
+              deviceUid,
+
+              status:
+                getSessionStatus(
+                  currentSession
+                ),
+            }
+          );
+
+          // =============================================
+          // ★ 통화 연결 API
+          // =============================================
+
+          const connectSuccess =
+            await connectCurrentSession(
+              initialSessionId,
+              activeToken
+            );
+
+          if (
+            pairingErrorHandledRef.current ||
+            authErrorHandledRef.current
+          ) {
+            return;
+          }
+
+          if (
+            !connectSuccess
+          ) {
+            Alert.alert(
+              "안내",
+              "통화 연결 상태를 확인할 수 없습니다.",
+              [
+                {
+                  text:
+                    "확인",
+
+                  onPress:
+                    () =>
+                      moveToIdleMainTab(
+                        {
+                          screen:
+                            "히스토리",
+
+                          endedSessionId:
+                            initialSessionId,
+                        }
+                      ),
+                },
+              ]
+            );
+
+            return;
+          }
+
+          // =============================================
+          // 메시지 polling 시작
+          // =============================================
+
+          startMessagePolling(
+            initialSessionId,
+            activeToken
+          );
         } catch (error) {
-          logUserChat("빠른 응답 목록 조회 실패", error?.message);
+          const serverError =
+            error.response?.data
+              ?.message ||
+            JSON.stringify(
+              error.response?.data
+            ) ||
+            error.message;
+
+          logUserChat(
+            "채팅방 초기화 실패",
+            serverError
+          );
+
+          Alert.alert(
+            "오류",
+            "인터폰 세션 정보를 불러오지 못했습니다.",
+            [
+              {
+                text: "확인",
+
+                onPress: () =>
+                  moveToIdleMainTab(
+                    {
+                      screen:
+                        "홈",
+                    }
+                  ),
+              },
+            ]
+          );
+        } finally {
+          if (
+            !isCancelled &&
+            isMountedRef.current
+          ) {
+            setIsLoading(
+              false
+            );
+          }
         }
-
-        if (!activeToken) {
-          logUserChat("초기화 중단 - accessToken 없음");
-
-          Alert.alert("오류", "로그인이 필요합니다.", [
-            {
-              text: "확인",
-              onPress: () => moveToIdleMainTab({ screen: "홈" }),
-            },
-          ]);
-
-          return;
-        }
-
-        if (!initialSessionId) {
-          logUserChat("초기화 중단 - sessionId 없음, 새 세션 자동 생성 차단");
-
-          Alert.alert("안내", "현재 연결된 인터폰 통화가 없습니다.", [
-            {
-              text: "확인",
-              onPress: () => moveToIdleMainTab({ screen: "홈" }),
-            },
-          ]);
-
-          return;
-        }
-
-        const currentSession = await fetchCurrentSession(activeToken);
-        const currentOpenSessionId = getSessionId(currentSession);
-
-        if (
-          !currentSession ||
-          isClosedSession(currentSession) ||
-          !isActiveSession(currentSession) ||
-          String(currentOpenSessionId) !== String(initialSessionId)
-        ) {
-          logUserChat("초기화 중단 - 현재 활성 세션 아님", {
-            routeSessionId: initialSessionId,
-            currentSessionId: currentOpenSessionId,
-            currentStatus: getSessionStatus(currentSession),
-            hasEndedAt: hasEndedAt(currentSession),
-          });
-
-          Alert.alert("안내", "이미 종료된 통화입니다.", [
-            {
-              text: "확인",
-              onPress: () =>
-                moveToIdleMainTab({
-                  screen: "히스토리",
-                  endedSessionId: initialSessionId,
-                }),
-            },
-          ]);
-
-          return;
-        }
-
-        if (!isCancelled && isMountedRef.current) {
-          setCurrentSessionId(initialSessionId);
-          setMessages([]);
-        }
-
-        logUserChat("기존 활성 세션 사용", {
-          sessionId: initialSessionId,
-          status: getSessionStatus(currentSession),
-        });
-
-        startMessagePolling(initialSessionId, activeToken);
-      } catch (error) {
-        const serverError =
-          error.response?.data?.message ||
-          JSON.stringify(error.response?.data) ||
-          error.message;
-
-        logUserChat("채팅방 초기화 실패", serverError);
-
-        Alert.alert("오류", "인터폰 세션 정보를 불러오지 못했습니다.", [
-          {
-            text: "확인",
-            onPress: () => moveToIdleMainTab({ screen: "홈" }),
-          },
-        ]);
-      } finally {
-        if (!isCancelled && isMountedRef.current) {
-          setIsLoading(false);
-        }
-      }
-    };
+      };
 
     initializeChatRoom();
 
     return () => {
       isCancelled = true;
+
       stopMessagePolling();
-      logUserChat("화면 이탈 - polling 정리");
+
+      logUserChat(
+        "화면 이탈 - polling 정리"
+      );
     };
   }, [initialSessionId]);
 
-  const moveToHistoryAfterEnd = async (endedSessionId) => {
-    await moveToIdleMainTab({
-      screen: "히스토리",
-      endedSessionId,
-    });
-  };
+  // =========================================================
+  // 종료
+  // =========================================================
 
-  const confirmEndCall = async () => {
-    if (isEndingRef.current) {
-      logUserChat("종료 요청 무시 - 이미 처리 중");
-      return;
-    }
-
-    isEndingRef.current = true;
-    setIsEnding(true);
-    setIsOverlayVisible(false);
-    stopMessagePolling();
-
-    const activeSessionId = currentSessionId || initialSessionId;
-    const activeToken = token || (await AsyncStorage.getItem("accessToken"));
-
-    if (!activeSessionId) {
-      logUserChat("종료 실패 - sessionId 없음");
-
-      Alert.alert("오류", "종료할 세션 정보를 찾을 수 없습니다.", [
+  const moveToHistoryAfterEnd =
+    async (
+      endedSessionId
+    ) => {
+      await moveToIdleMainTab(
         {
-          text: "확인",
-          onPress: async () => {
-            await moveToHistoryAfterEnd(null);
-          },
-        },
-      ]);
+          screen:
+            "히스토리",
 
-      return;
-    }
-
-    let isEndSuccess = false;
-
-    try {
-      logUserChat("세션 종료 요청", {
-        sessionId: activeSessionId,
-        hasToken: Boolean(activeToken),
-      });
-
-      const response = await axios.post(
-        `${BASE_URL}/api/sessions/end`,
-        {
-          sessionId: activeSessionId,
-        },
-        {
-          headers: {
-            ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
-            "Content-Type": "application/json",
-          },
+          endedSessionId,
         }
       );
+    };
 
-      isEndSuccess = response.data?.success !== false;
-
-      logUserChat("세션 종료 응답", {
-        sessionId: activeSessionId,
-        status: response.status,
-        data: response.data,
-        success: response.data?.success,
-        endedAt: response.data?.data?.endedAt || null,
-      });
-    } catch (error) {
-      const serverError =
-        error.response?.data?.message ||
-        JSON.stringify(error.response?.data) ||
-        error.message;
-
-      logUserChat("세션 종료 실패", {
-        sessionId: activeSessionId,
-        error: serverError,
-      });
-    } finally {
-      if (isEndSuccess) {
-        await moveToHistoryAfterEnd(activeSessionId);
-      } else {
-        isEndingRef.current = false;
-
-        if (isMountedRef.current) {
-          setIsEnding(false);
-        }
-
-        Alert.alert(
-          "종료 실패",
-          "통화 종료 처리에 실패했습니다. 잠시 후 다시 시도해 주세요."
+  const confirmEndCall =
+    async () => {
+      if (
+        isEndingRef.current
+      ) {
+        logUserChat(
+          "종료 요청 무시 - 이미 처리 중"
         );
-      }
-    }
-  };
-
-  const handleSelectTag = (item) => {
-    if (isEndingRef.current) return;
-
-    if (!selectedTags.some((tag) => tag.replyCode === item.replyCode)) {
-      setSelectedTags((prev) => [...prev, item]);
-
-      logUserChat("빠른 응답 선택", {
-        replyCode: item.replyCode,
-        text: item.text,
-      });
-    }
-  };
-
-  const removeTag = (index) => {
-    if (isEndingRef.current) return;
-
-    setSelectedTags((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const appendLocalSendMessage = (text) => {
-    const safeText = String(text || "").trim();
-
-    if (!safeText) return;
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `local-send-${Date.now()}`,
-        text: safeText,
-        type: "send",
-        time: getTimeString(),
-        createdAt: "",
-      },
-    ]);
-  };
-
-  const handleSendResponse = async () => {
-    if (isEndingRef.current) return;
-    if (selectedTags.length === 0) return;
-
-    const targetSessionId = currentSessionId;
-    const activeToken = token || (await AsyncStorage.getItem("accessToken"));
-    const tagsToSend = [...selectedTags];
-    const firstReply = tagsToSend[0];
-
-    if (!targetSessionId) {
-      Alert.alert("오류", "현재 연결된 세션이 없습니다.");
-      return;
-    }
-
-    if (!activeToken) {
-      Alert.alert("오류", "로그인이 필요합니다.");
-      return;
-    }
-
-    const newMessageText = tagsToSend.map((tag) => tag.text).join(" ");
-
-    appendLocalSendMessage(newMessageText);
-    setSelectedTags([]);
-
-    try {
-      logUserChat("빠른 응답 전송 요청", {
-        sessionId: targetSessionId,
-        replyCode: firstReply.replyCode,
-        text: newMessageText,
-      });
-
-      const response = await axios.post(
-        `${BASE_URL}/api/sessions/${targetSessionId}/reply`,
-        {
-          replyCode: firstReply.replyCode,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${activeToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      logUserChat("빠른 응답 전송 완료", {
-        sessionId: targetSessionId,
-        status: response.status,
-      });
-
-      fetchSessionMessages({
-        targetSessionId,
-        activeToken,
-        shouldVibrate: false,
-      });
-    } catch (error) {
-      const serverStatus = error.response?.status;
-      const serverError =
-        error.response?.data?.message ||
-        JSON.stringify(error.response?.data) ||
-        error.message;
-
-      logUserChat("빠른 응답 전송 실패", {
-        sessionId: targetSessionId,
-        status: serverStatus,
-        error: serverError,
-      });
-
-      if (serverStatus === 404 || serverStatus === 409 || serverStatus === 410) {
-        Alert.alert("안내", "종료된 통화에는 응답을 보낼 수 없습니다.", [
-          {
-            text: "확인",
-            onPress: () =>
-              moveToIdleMainTab({
-                screen: "히스토리",
-                endedSessionId: targetSessionId,
-              }),
-          },
-        ]);
 
         return;
       }
 
-      Alert.alert("전송 실패", "빠른 응답을 전송하지 못했습니다.");
+      isEndingRef.current =
+        true;
+
+      setIsEnding(true);
+
+      setIsOverlayVisible(
+        false
+      );
+
+      stopMessagePolling();
+
+      const activeSessionId =
+        currentSessionId ||
+        initialSessionId;
+
+      const activeToken =
+        token ||
+        (await AsyncStorage.getItem(
+          "accessToken"
+        ));
+
+      if (!activeSessionId) {
+        logUserChat(
+          "종료 실패 - sessionId 없음"
+        );
+
+        Alert.alert(
+          "오류",
+          "종료할 세션 정보를 찾을 수 없습니다.",
+          [
+            {
+              text: "확인",
+
+              onPress:
+                async () => {
+                  await moveToHistoryAfterEnd(
+                    null
+                  );
+                },
+            },
+          ]
+        );
+
+        return;
+      }
+
+      if (!activeToken) {
+        isEndingRef.current =
+          false;
+
+        setIsEnding(false);
+
+        await handleAuthExpired();
+
+        return;
+      }
+
+      let isEndSuccess =
+        false;
+
+      try {
+        logUserChat(
+          "세션 종료 요청",
+          {
+            sessionId:
+              activeSessionId,
+
+            hasToken:
+              Boolean(
+                activeToken
+              ),
+          }
+        );
+
+        const response =
+          await axios.post(
+            `${BASE_URL}/api/sessions/end`,
+            {
+              sessionId:
+                activeSessionId,
+            },
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+
+                "Content-Type":
+                  "application/json",
+              },
+
+              timeout: 10000,
+            }
+          );
+
+        isEndSuccess =
+          response.data
+            ?.success !==
+          false;
+
+        logUserChat(
+          "세션 종료 응답",
+          {
+            sessionId:
+              activeSessionId,
+
+            status:
+              response.status,
+
+            data:
+              response.data,
+
+            success:
+              response.data
+                ?.success,
+
+            endedAt:
+              response.data
+                ?.data
+                ?.endedAt ||
+              null,
+          }
+        );
+      } catch (error) {
+        const status =
+          error.response
+            ?.status;
+
+        const serverError =
+          error.response?.data
+            ?.message ||
+          JSON.stringify(
+            error.response?.data
+          ) ||
+          error.message;
+
+        logUserChat(
+          "세션 종료 실패",
+          {
+            sessionId:
+              activeSessionId,
+
+            status,
+
+            error:
+              serverError,
+          }
+        );
+
+        if (
+          status === 401 ||
+          status === 403
+        ) {
+          isEndingRef.current =
+            false;
+
+          setIsEnding(false);
+
+          await handleAuthExpired();
+
+          return;
+        }
+      } finally {
+        if (isEndSuccess) {
+          await moveToHistoryAfterEnd(
+            activeSessionId
+          );
+        } else if (
+          !authErrorHandledRef.current
+        ) {
+          isEndingRef.current =
+            false;
+
+          if (
+            isMountedRef.current
+          ) {
+            setIsEnding(
+              false
+            );
+          }
+
+          Alert.alert(
+            "종료 실패",
+            "통화 종료 처리에 실패했습니다. 잠시 후 다시 시도해 주세요."
+          );
+
+          /**
+           * 종료 실패했으니 다시 메시지 polling
+           */
+          if (
+            activeSessionId &&
+            activeToken
+          ) {
+            startMessagePolling(
+              activeSessionId,
+              activeToken
+            );
+          }
+        }
+      }
+    };
+
+  // =========================================================
+  // 빠른 응답 선택
+  // =========================================================
+
+  const handleSelectTag = (
+    item
+  ) => {
+    if (
+      isEndingRef.current
+    ) {
+      return;
     }
+
+    /**
+     * ★ 단일 선택
+     *
+     * 기존에는
+     *
+     * [네.] + [문 앞에 두고 가세요.]
+     *
+     * 두 개 선택이 가능했는데,
+     * 백엔드는 replyCode 1개만 받음.
+     *
+     * 이제 하나만 선택.
+     */
+    setSelectedTags(
+      (prev) => {
+        const currentlySelected =
+          prev[0];
+
+        /**
+         * 같은 버튼 다시 누르면 선택 해제
+         */
+        if (
+          currentlySelected &&
+          String(
+            currentlySelected.replyCode
+          ) ===
+            String(
+              item.replyCode
+            )
+        ) {
+          logUserChat(
+            "빠른 응답 선택 해제",
+            {
+              replyCode:
+                item.replyCode,
+            }
+          );
+
+          return [];
+        }
+
+        logUserChat(
+          "빠른 응답 선택",
+          {
+            replyCode:
+              item.replyCode,
+
+            text:
+              item.text,
+          }
+        );
+
+        return [item];
+      }
+    );
   };
 
-  const visibleMessages = messages.filter((msg) => msg.type !== "system");
+  const removeTag = () => {
+    if (
+      isEndingRef.current
+    ) {
+      return;
+    }
+
+    setSelectedTags([]);
+  };
+
+  // =========================================================
+  // 로컬 메시지 즉시 추가
+  // =========================================================
+
+  const appendLocalSendMessage =
+    (text) => {
+      const safeText =
+        String(
+          text || ""
+        ).trim();
+
+      if (!safeText) {
+        return;
+      }
+
+      setMessages(
+        (prev) => [
+          ...prev,
+
+          {
+            id:
+              `local-send-${Date.now()}`,
+
+            text:
+              safeText,
+
+            type:
+              "send",
+
+            time:
+              getTimeString(),
+
+            createdAt:
+              "",
+          },
+        ]
+      );
+    };
+
+  // =========================================================
+  // 빠른 응답 전송
+  // =========================================================
+
+  const handleSendResponse =
+    async () => {
+      if (
+        isEndingRef.current
+      ) {
+        return;
+      }
+
+      if (
+        selectedTags.length ===
+        0
+      ) {
+        return;
+      }
+
+      const selectedReply =
+        selectedTags[0];
+
+      const targetSessionId =
+        currentSessionId;
+
+      const activeToken =
+        token ||
+        (await AsyncStorage.getItem(
+          "accessToken"
+        ));
+
+      if (!targetSessionId) {
+        Alert.alert(
+          "오류",
+          "현재 연결된 세션이 없습니다."
+        );
+
+        return;
+      }
+
+      if (!activeToken) {
+        await handleAuthExpired();
+
+        return;
+      }
+
+      if (
+        !selectedReply
+          ?.replyCode
+      ) {
+        Alert.alert(
+          "오류",
+          "빠른 응답 정보를 확인할 수 없습니다."
+        );
+
+        return;
+      }
+
+      const messageText =
+        String(
+          selectedReply.text ||
+            ""
+        ).trim();
+
+      try {
+        logUserChat(
+          "빠른 응답 전송 요청",
+          {
+            sessionId:
+              targetSessionId,
+
+            replyCode:
+              selectedReply.replyCode,
+
+            text:
+              messageText,
+          }
+        );
+
+        const response =
+          await axios.post(
+            `${BASE_URL}/api/sessions/${targetSessionId}/reply`,
+            {
+              replyCode:
+                selectedReply.replyCode,
+            },
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+
+                "Content-Type":
+                  "application/json",
+              },
+
+              timeout: 10000,
+            }
+          );
+
+        logUserChat(
+          "빠른 응답 전송 완료",
+          {
+            sessionId:
+              targetSessionId,
+
+            status:
+              response.status,
+
+            response:
+              response.data,
+          }
+        );
+
+        /**
+         * 서버 전송 성공 이후에만
+         * 내 메시지를 화면에 즉시 표시.
+         *
+         * 실패했는데 화면에는 보이는
+         * phantom message 방지.
+         */
+        appendLocalSendMessage(
+          messageText
+        );
+
+        setSelectedTags([]);
+
+        /**
+         * 서버 DB 저장된 메시지로 다시 동기화.
+         */
+        await fetchSessionMessages(
+          {
+            targetSessionId,
+            activeToken,
+            shouldVibrate:
+              false,
+          }
+        );
+      } catch (error) {
+        const serverStatus =
+          error.response
+            ?.status;
+
+        const serverError =
+          error.response?.data
+            ?.message ||
+          error.response?.data
+            ?.error ||
+          JSON.stringify(
+            error.response?.data
+          ) ||
+          error.message;
+
+        logUserChat(
+          "빠른 응답 전송 실패",
+          {
+            sessionId:
+              targetSessionId,
+
+            status:
+              serverStatus,
+
+            error:
+              serverError,
+          }
+        );
+
+        if (
+          serverStatus === 401 ||
+          serverStatus === 403
+        ) {
+          await handleAuthExpired();
+
+          return;
+        }
+
+        /**
+         * 세션 권한 문제
+         */
+        if (
+          serverStatus ===
+            400 &&
+          String(
+            serverError
+          ).includes("권한")
+        ) {
+          await handlePairingPermissionError(
+            activeToken,
+            targetSessionId
+          );
+
+          return;
+        }
+
+        /**
+         * 이미 종료된 세션
+         */
+        if (
+          serverStatus === 404 ||
+          serverStatus === 409 ||
+          serverStatus === 410
+        ) {
+          stopMessagePolling();
+
+          Alert.alert(
+            "안내",
+            "종료된 통화에는 응답을 보낼 수 없습니다.",
+            [
+              {
+                text:
+                  "확인",
+
+                onPress:
+                  () =>
+                    moveToIdleMainTab(
+                      {
+                        screen:
+                          "히스토리",
+
+                        endedSessionId:
+                          targetSessionId,
+                      }
+                    ),
+              },
+            ]
+          );
+
+          return;
+        }
+
+        Alert.alert(
+          "전송 실패",
+          serverError ||
+            "빠른 응답을 전송하지 못했습니다."
+        );
+      }
+    };
+
+  // =========================================================
+  // System 메시지는 UI에서 숨김
+  // =========================================================
+
+  const visibleMessages =
+    messages.filter(
+      (msg) =>
+        msg.type !==
+        "system"
+    );
+
+  // =========================================================
+  // UI
+  // =========================================================
 
   return (
     <Container>
+      {/* ================= HEADER ================= */}
+
       <Header>
         <HeaderSide>
           <TouchableOpacity
             onPress={() => {
-              if (isEndingRef.current) return;
+              if (
+                isEndingRef.current
+              ) {
+                return;
+              }
 
-              logUserChat("상단 뒤로가기 클릭 - 종료 모달 표시");
-              setIsOverlayVisible(true);
+              logUserChat(
+                "상단 뒤로가기 클릭 - 종료 모달 표시"
+              );
+
+              setIsOverlayVisible(
+                true
+              );
             }}
             disabled={isEnding}
           >
-            <IconBtn source={backIcon} resizeMode="contain" />
+            <IconBtn
+              source={backIcon}
+              resizeMode="contain"
+            />
           </TouchableOpacity>
         </HeaderSide>
 
-        <HeaderSide style={{ width: 120 }}>
+        <HeaderSide
+          style={{
+            width: 120,
+          }}
+        >
           <HeaderCenter>
-            <Logo source={bellIcon} resizeMode="contain" />
-            <HeaderTitle>인터폰 실시간</HeaderTitle>
+            <Logo
+              source={bellIcon}
+              resizeMode="contain"
+            />
+
+            <HeaderTitle>
+              인터폰 실시간
+            </HeaderTitle>
           </HeaderCenter>
         </HeaderSide>
 
         <HeaderSide
           style={{
-            flexDirection: "row",
-            justifyContent: "flex-end",
-            alignItems: "center",
+            flexDirection:
+              "row",
+
+            justifyContent:
+              "flex-end",
+
+            alignItems:
+              "center",
           }}
         >
-          <TimerText>{formatTimer(seconds)}</TimerText>
+          <TimerText>
+            {formatTimer(
+              seconds
+            )}
+          </TimerText>
 
           <TouchableOpacity
             onPress={() => {
-              if (isEndingRef.current) return;
+              if (
+                isEndingRef.current
+              ) {
+                return;
+              }
 
-              logUserChat("통화 종료 버튼 클릭 - 종료 모달 표시");
-              setIsOverlayVisible(true);
+              logUserChat(
+                "통화 종료 버튼 클릭 - 종료 모달 표시"
+              );
+
+              setIsOverlayVisible(
+                true
+              );
             }}
             disabled={isEnding}
-            style={{ marginLeft: 10 }}
+            style={{
+              marginLeft: 10,
+            }}
           >
-            <EndIcon source={callEndIcon} resizeMode="contain" />
+            <EndIcon
+              source={callEndIcon}
+              resizeMode="contain"
+            />
           </TouchableOpacity>
         </HeaderSide>
       </Header>
 
+      {/* ================= CHAT ================= */}
+
       <ChatArea>
         {isLoading ? (
           <View
-            style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
+            style={{
+              flex: 1,
+
+              justifyContent:
+                "center",
+
+              alignItems:
+                "center",
+            }}
           >
-            <ActivityIndicator size="large" color="#06F393" />
+            <ActivityIndicator
+              size="large"
+              color="#06F393"
+            />
           </View>
         ) : (
           <ScrollView
             ref={scrollViewRef}
-            showsVerticalScrollIndicator={false}
+            showsVerticalScrollIndicator={
+              false
+            }
             onContentSizeChange={() =>
-              scrollViewRef.current?.scrollToEnd({ animated: true })
+              scrollViewRef.current?.scrollToEnd(
+                {
+                  animated:
+                    true,
+                }
+              )
             }
           >
-            {visibleMessages.map((msg) =>
-              msg.type === "receive" ? (
-                <ReceiveBubble key={msg.id}>
-                  <BubbleTextContainer>
-                    <ReceiveBubbleText>{msg.text}</ReceiveBubbleText>
-                  </BubbleTextContainer>
-                </ReceiveBubble>
-              ) : (
-                <SendBubble key={msg.id}>
-                  <SendBubbleText>{msg.text}</SendBubbleText>
-                </SendBubble>
-              )
+            {visibleMessages.map(
+              (msg) =>
+                msg.type ===
+                "receive" ? (
+                  <ReceiveBubble
+                    key={
+                      msg.id
+                    }
+                  >
+                    <BubbleTextContainer>
+                      <ReceiveBubbleText>
+                        {
+                          msg.text
+                        }
+                      </ReceiveBubbleText>
+                    </BubbleTextContainer>
+                  </ReceiveBubble>
+                ) : (
+                  <SendBubble
+                    key={
+                      msg.id
+                    }
+                  >
+                    <SendBubbleText>
+                      {
+                        msg.text
+                      }
+                    </SendBubbleText>
+                  </SendBubble>
+                )
             )}
           </ScrollView>
         )}
       </ChatArea>
 
+      {/* ================= QUICK REPLY ================= */}
+
       <InputSection>
         <InputBar>
           <ScrollView
             horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ alignItems: "center" }}
+            showsHorizontalScrollIndicator={
+              false
+            }
+            contentContainerStyle={{
+              alignItems:
+                "center",
+            }}
           >
-            {selectedTags.map((item, index) => (
-              <SelectedTag key={`${item.replyCode}-${index}`}>
-                <TagText>{item.text}</TagText>
-
-                <TouchableOpacity
-                  onPress={() => removeTag(index)}
-                  disabled={isEnding}
+            {selectedTags.map(
+              (item) => (
+                <SelectedTag
+                  key={String(
+                    item.replyCode
+                  )}
                 >
-                  <Ionicons name="close-circle" size={16} color="#FF4D4D" />
-                </TouchableOpacity>
-              </SelectedTag>
-            ))}
+                  <TagText>
+                    {
+                      item.text
+                    }
+                  </TagText>
+
+                  <TouchableOpacity
+                    onPress={
+                      removeTag
+                    }
+                    disabled={
+                      isEnding
+                    }
+                  >
+                    <Ionicons
+                      name="close-circle"
+                      size={16}
+                      color="#FF4D4D"
+                    />
+                  </TouchableOpacity>
+                </SelectedTag>
+              )
+            )}
           </ScrollView>
 
           <TouchableOpacity
-            onPress={handleSendResponse}
-            disabled={isEnding || selectedTags.length === 0}
+            onPress={
+              handleSendResponse
+            }
+            disabled={
+              isEnding ||
+              selectedTags.length ===
+                0
+            }
           >
             <SendBtnIcon
-              source={selectedTags.length > 0 ? sendActive : sendInactive}
+              source={
+                selectedTags.length >
+                0
+                  ? sendActive
+                  : sendInactive
+              }
             />
           </TouchableOpacity>
         </InputBar>
 
+        {/* Tabs */}
+
         <TabContainer>
-          {tabs.map((tab) => (
-            <TabButton
-              key={tab}
-              isActive={activeTab === tab}
-              onPress={() => {
-                if (isEndingRef.current) return;
-                setActiveTab(tab);
-              }}
-              disabled={isEnding}
-            >
-              <TabText isActive={activeTab === tab}>{tab}</TabText>
-            </TabButton>
-          ))}
+          {tabs.map(
+            (tab) => (
+              <TabButton
+                key={tab}
+                isActive={
+                  activeTab ===
+                  tab
+                }
+                onPress={() => {
+                  if (
+                    isEndingRef.current
+                  ) {
+                    return;
+                  }
+
+                  setActiveTab(
+                    tab
+                  );
+
+                  /**
+                   * 다른 카테고리로 이동하면
+                   * 기존 선택 답변 제거.
+                   */
+                  setSelectedTags(
+                    []
+                  );
+                }}
+                disabled={
+                  isEnding
+                }
+              >
+                <TabText
+                  isActive={
+                    activeTab ===
+                    tab
+                  }
+                >
+                  {tab}
+                </TabText>
+              </TabButton>
+            )
+          )}
         </TabContainer>
 
+        {/* Quick buttons */}
+
         <QuickGrid>
-          {getFilteredReplies(activeTab).map((item) => (
-            <QuickBtn
-              key={`${activeTab}-${item.replyCode}`}
-              onPress={() => handleSelectTag(item)}
-              disabled={isEnding}
-            >
-              <QuickBtnText>{item.text}</QuickBtnText>
-            </QuickBtn>
-          ))}
+          {getFilteredReplies(
+            activeTab
+          ).map((item) => {
+            const isSelected =
+              selectedTags.some(
+                (selected) =>
+                  String(
+                    selected.replyCode
+                  ) ===
+                  String(
+                    item.replyCode
+                  )
+              );
+
+            return (
+              <QuickBtn
+                key={`${activeTab}-${item.replyCode}`}
+                onPress={() =>
+                  handleSelectTag(
+                    item
+                  )
+                }
+                disabled={
+                  isEnding
+                }
+                isSelected={
+                  isSelected
+                }
+              >
+                <QuickBtnText
+                  isSelected={
+                    isSelected
+                  }
+                >
+                  {item.text}
+                </QuickBtnText>
+              </QuickBtn>
+            );
+          })}
         </QuickGrid>
       </InputSection>
 
+      {/* ================= END MODAL ================= */}
+
       <Modal
         transparent
-        visible={isOverlayVisible}
+        visible={
+          isOverlayVisible
+        }
         animationType="fade"
         onRequestClose={() => {
-          if (isEndingRef.current) return;
-          setIsOverlayVisible(false);
+          if (
+            isEndingRef.current
+          ) {
+            return;
+          }
+
+          setIsOverlayVisible(
+            false
+          );
         }}
       >
         <OverlayBackground>
-          <OverlayImageCard source={callEndOverlayImg} resizeMode="contain">
+          <OverlayImageCard
+            source={
+              callEndOverlayImg
+            }
+            resizeMode="contain"
+          >
             <TransparentButtonRow>
+              {/* 종료 */}
+
               <TransparentTouchArea
                 onPress={() => {
-                  if (isEndingRef.current) return;
+                  if (
+                    isEndingRef.current
+                  ) {
+                    return;
+                  }
+
                   confirmEndCall();
                 }}
-                disabled={isEnding}
+                disabled={
+                  isEnding
+                }
               />
+
+              {/* 취소 */}
 
               <TransparentTouchArea
                 onPress={() => {
-                  if (isEndingRef.current) return;
+                  if (
+                    isEndingRef.current
+                  ) {
+                    return;
+                  }
 
-                  logUserChat("종료 모달 취소");
-                  setIsOverlayVisible(false);
+                  logUserChat(
+                    "종료 모달 취소"
+                  );
+
+                  setIsOverlayVisible(
+                    false
+                  );
                 }}
-                disabled={isEnding}
+                disabled={
+                  isEnding
+                }
               />
             </TransparentButtonRow>
           </OverlayImageCard>
@@ -1245,9 +3403,15 @@ export default function IntercomChatScreen() {
   );
 }
 
-const Container = styled(SafeAreaContainer)`
+// =========================================================
+// STYLE
+// =========================================================
+
+const Container = styled(
+  SafeAreaContainer
+)`
   flex: 1;
-  background-color: #F5F5F5;
+  background-color: #f5f5f5;
 `;
 
 const Header = styled.View`
@@ -1257,7 +3421,7 @@ const Header = styled.View`
   padding: 10px 15px;
   background-color: #fff;
   border-bottom-width: 1px;
-  border-bottom-color: #EEE;
+  border-bottom-color: #eee;
 `;
 
 const HeaderSide = styled.View`
@@ -1292,7 +3456,7 @@ const HeaderTitle = styled.Text`
 
 const TimerText = styled.Text`
   font-size: 14px;
-  color: #FF5C00;
+  color: #ff5c00;
   font-weight: 700;
   letter-spacing: -0.2px;
 `;
@@ -1335,7 +3499,7 @@ const SendBubble = styled.View`
 
 const SendBubbleText = styled.Text`
   max-width: 72%;
-  background-color: #06F393;
+  background-color: #06f393;
   color: white;
   padding: 14px 18px;
   border-radius: 18px;
@@ -1361,20 +3525,20 @@ const InputSection = styled.View`
 const InputBar = styled.View`
   flex-direction: row;
   align-items: center;
-  background-color: #F8F9FA;
+  background-color: #f8f9fa;
   border-radius: 30px;
   padding: 6px 12px;
   margin-bottom: 12px;
   border-width: 1px;
-  border-color: #EAEAEA;
+  border-color: #eaeaea;
 `;
 
 const SelectedTag = styled.View`
   flex-direction: row;
   align-items: center;
-  background-color: #FFFFFF;
+  background-color: #ffffff;
   border-width: 1px;
-  border-color: #E2E8F0;
+  border-color: #e2e8f0;
   padding: 6px 12px;
   border-radius: 16px;
   margin-right: 8px;
@@ -1402,14 +3566,23 @@ const TabContainer = styled.View`
 const TabButton = styled.TouchableOpacity`
   margin-right: 18px;
   padding-bottom: 4px;
-  border-bottom-width: ${(props) => (props.isActive ? "2px" : "0px")};
+  border-bottom-width: ${(props) =>
+    props.isActive
+      ? "2px"
+      : "0px"};
   border-bottom-color: #333;
 `;
 
 const TabText = styled.Text`
   font-size: 15px;
-  font-weight: ${(props) => (props.isActive ? "800" : "500")};
-  color: ${(props) => (props.isActive ? "#333" : "#AAA")};
+  font-weight: ${(props) =>
+    props.isActive
+      ? "800"
+      : "500"};
+  color: ${(props) =>
+    props.isActive
+      ? "#333"
+      : "#AAA"};
 `;
 
 const QuickGrid = styled.View`
@@ -1421,31 +3594,51 @@ const QuickGrid = styled.View`
 
 const QuickBtn = styled.TouchableOpacity`
   width: 48.5%;
-  background-color: #F8F9FA;
+  background-color: ${(props) =>
+    props.isSelected
+      ? "#E9FFF5"
+      : "#F8F9FA"};
   padding: 14px 10px;
   border-radius: 15px;
   align-items: center;
   margin-bottom: 10px;
   border-width: 1px;
-  border-color: #F0F1F2;
+  border-color: ${(props) =>
+    props.isSelected
+      ? "#06F393"
+      : "#F0F1F2"};
 `;
 
 const QuickBtnText = styled.Text`
   font-size: 15px;
-  color: #444;
-  font-weight: 600;
+  color: ${(props) =>
+    props.isSelected
+      ? "#00B96B"
+      : "#444"};
+  font-weight: ${(props) =>
+    props.isSelected
+      ? "800"
+      : "600"};
 `;
 
 const OverlayBackground = styled.View`
   flex: 1;
-  background-color: rgba(0, 0, 0, 0.4);
+  background-color: rgba(
+    0,
+    0,
+    0,
+    0.4
+  );
   justify-content: center;
   align-items: center;
 `;
 
 const OverlayImageCard = styled.ImageBackground`
-  width: ${SCREEN_WIDTH * 0.8}px;
-  height: ${(SCREEN_WIDTH * 0.8) * 0.52}px;
+  width: ${SCREEN_WIDTH *
+  0.8}px;
+  height: ${SCREEN_WIDTH *
+  0.8 *
+  0.52}px;
   justify-content: flex-end;
   padding-bottom: 15px;
 `;

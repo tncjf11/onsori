@@ -79,13 +79,13 @@ export default function AdminBtnStatScreen() {
   };
 
   const [selectedDate, setSelectedDate] = useState(getTodayDate());
+  const [filterMode, setFilterMode] = useState("today");
   const [isDateModalVisible, setIsDateModalVisible] = useState(false);
   const [btnStats, setBtnStats] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [highestBtn, setHighestBtn] = useState(null);
   const [lowestBtn, setLowestBtn] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isDateFilterApplied, setIsDateFilterApplied] = useState(true);
 
   const getCount = (item) => {
     return Number(item?.useCount ?? item?.count ?? 0);
@@ -173,22 +173,23 @@ export default function AdminBtnStatScreen() {
     return [];
   };
 
-  const requestStatistics = async (token, useDateFilter = true) => {
+  const requestStatistics = async (token) => {
     const config = {
       headers: {
         Authorization: `Bearer ${token}`,
       },
     };
 
-    if (useDateFilter) {
+    if (filterMode === "date") {
       config.params = {
         date: selectedDate,
       };
     }
 
-    logBtnStat("통계 조회 요청", {
-      useDateFilter,
-      selectedDate: useDateFilter ? selectedDate : null,
+    logBtnStat("빠른 응답 통계 조회 요청", {
+      endpoint: "/api/admin/quick-replies/statistics",
+      mode: filterMode,
+      dateParam: filterMode === "date" ? selectedDate : "없음 - 오늘 기준",
     });
 
     return axios.get(`${BASE_URL}/api/admin/quick-replies/statistics`, config);
@@ -199,6 +200,7 @@ export default function AdminBtnStatScreen() {
       setIsLoading(true);
 
       logBtnStat("통계 화면 조회 시작", {
+        filterMode,
         selectedDate,
       });
 
@@ -212,41 +214,13 @@ export default function AdminBtnStatScreen() {
         return;
       }
 
-      let rawStats = [];
-
-      try {
-        const response = await requestStatistics(token, true);
-        rawStats = extractStatsData(response);
-        setIsDateFilterApplied(true);
-
-        logBtnStat("날짜별 통계 조회 성공", {
-          selectedDate,
-          count: rawStats.length,
-        });
-      } catch (error) {
-        const dateError =
-          error.response?.data?.message ||
-          JSON.stringify(error.response?.data) ||
-          error.message;
-
-        logBtnStat("날짜별 통계 조회 실패 - 전체 통계 fallback 시도", {
-          selectedDate,
-          error: dateError,
-        });
-
-        const fallbackResponse = await requestStatistics(token, false);
-        rawStats = extractStatsData(fallbackResponse);
-        setIsDateFilterApplied(false);
-
-        logBtnStat("전체 통계 fallback 조회 성공", {
-          count: rawStats.length,
-        });
-      }
+      const response = await requestStatistics(token);
+      const rawStats = extractStatsData(response);
 
       if (rawStats.length === 0) {
         logBtnStat("통계 데이터 없음", {
+          filterMode,
           selectedDate,
-          isDateFilterApplied,
         });
 
         resetStatistics();
@@ -270,12 +244,23 @@ export default function AdminBtnStatScreen() {
   useEffect(() => {
     if (isFocused) {
       logBtnStat("화면 포커스", {
+        filterMode,
         selectedDate,
       });
 
       fetchStatistics();
     }
-  }, [isFocused, selectedDate]);
+  }, [isFocused, selectedDate, filterMode]);
+
+  const handleSelectToday = () => {
+    logBtnStat("오늘 통계 선택", {
+      previousMode: filterMode,
+    });
+
+    setFilterMode("today");
+    setSelectedDate(getTodayDate());
+    setIsDateModalVisible(false);
+  };
 
   const handleSelectDate = (day) => {
     logBtnStat("날짜 선택", {
@@ -284,7 +269,16 @@ export default function AdminBtnStatScreen() {
     });
 
     setSelectedDate(day.dateString);
+    setFilterMode("date");
     setIsDateModalVisible(false);
+  };
+
+  const getEmptyMessage = () => {
+    if (filterMode === "today") {
+      return "오늘 집계된 통계가 없습니다.";
+    }
+
+    return "해당 날짜에 집계된 통계가 없습니다.";
   };
 
   return (
@@ -299,17 +293,30 @@ export default function AdminBtnStatScreen() {
           <BackIcon source={backIcon} resizeMode="contain" />
         </TouchableOpacity>
 
-        <HeaderTitle>빠른 응답 통계</HeaderTitle>
+        <HeaderTitle>버튼 응답 빈도</HeaderTitle>
 
         <View style={{ width: 24 }} />
       </Header>
 
       <DateControlSection>
-        <DateDisplayBox>
-          <DateDisplayText>{selectedDate.replace(/-/g, "/")}</DateDisplayText>
+        <TodaySelectButton
+          isActive={filterMode === "today"}
+          onPress={handleSelectToday}
+          activeOpacity={0.8}
+        >
+          <TodaySelectButtonText isActive={filterMode === "today"}>
+            오늘
+          </TodaySelectButtonText>
+        </TodaySelectButton>
+
+        <DateDisplayBox isActive={filterMode === "date"}>
+          <DateDisplayText isActive={filterMode === "date"}>
+            {selectedDate.replace(/-/g, "/")}
+          </DateDisplayText>
         </DateDisplayBox>
 
         <DateSelectButton
+          isActive={filterMode === "date"}
           onPress={() => {
             logBtnStat("날짜 선택 모달 열기");
             setIsDateModalVisible(true);
@@ -319,12 +326,6 @@ export default function AdminBtnStatScreen() {
           <DateSelectButtonText>날짜 선택</DateSelectButtonText>
         </DateSelectButton>
       </DateControlSection>
-
-      {!isDateFilterApplied && (
-        <NoticeText>
-          날짜별 통계가 지원되지 않아 전체 통계로 표시됩니다.
-        </NoticeText>
-      )}
 
       {isLoading ? (
         <LoadingWrapper>
@@ -344,7 +345,7 @@ export default function AdminBtnStatScreen() {
 
             <SubTitleRow>
               <Ionicons name="bar-chart-outline" size={20} color="#333" />
-              <SubTitleText>버튼별 선택 횟수</SubTitleText>
+              <SubTitleText>버튼 별 선택 횟수</SubTitleText>
             </SubTitleRow>
 
             {btnStats.length > 0 ? (
@@ -358,7 +359,7 @@ export default function AdminBtnStatScreen() {
                 </StatRow>
               ))
             ) : (
-              <EmptyText>해당 날짜에 집계된 통계가 없습니다.</EmptyText>
+              <EmptyText>{getEmptyMessage()}</EmptyText>
             )}
           </StatCard>
 
@@ -373,7 +374,7 @@ export default function AdminBtnStatScreen() {
             >
               <HighlightRow>
                 <Ionicons name="add-circle-outline" size={20} color="#1EC949" />
-                <HighlightTitle>가장 많이 선택된 버튼</HighlightTitle>
+                <HighlightTitle>최다 선택 버튼</HighlightTitle>
               </HighlightRow>
 
               {highestBtn ? (
@@ -398,7 +399,7 @@ export default function AdminBtnStatScreen() {
                   size={20}
                   color="#FF5C5C"
                 />
-                <HighlightTitle>가장 적게 선택된 버튼</HighlightTitle>
+                <HighlightTitle>최소 선택 버튼</HighlightTitle>
               </HighlightRow>
 
               {lowestBtn ? (
@@ -516,38 +517,46 @@ const DateControlSection = styled.View`
   padding: 10px 20px 20px;
 `;
 
-const DateDisplayBox = styled.View`
-  padding: 8px 16px;
+const TodaySelectButton = styled.TouchableOpacity`
+  padding: 8px 15px;
   border-width: 1.5px;
   border-color: #1EC949;
   border-radius: 20px;
-  background-color: #fff;
-  margin-right: 12px;
+  background-color: ${(props) => (props.isActive ? "#1EC949" : "#fff")};
+  margin-right: 8px;
+`;
+
+const TodaySelectButtonText = styled.Text`
+  font-size: 14px;
+  font-weight: 700;
+  color: ${(props) => (props.isActive ? "#fff" : "#1EC949")};
+`;
+
+const DateDisplayBox = styled.View`
+  padding: 8px 14px;
+  border-width: 1.5px;
+  border-color: #1EC949;
+  border-radius: 20px;
+  background-color: ${(props) => (props.isActive ? "#fff" : "#F8F8F8")};
+  margin-right: 8px;
 `;
 
 const DateDisplayText = styled.Text`
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  color: #1EC949;
+  color: ${(props) => (props.isActive ? "#1EC949" : "#999")};
 `;
 
 const DateSelectButton = styled.TouchableOpacity`
-  padding: 9px 18px;
-  background-color: #1EC949;
+  padding: 9px 16px;
+  background-color: ${(props) => (props.isActive ? "#1EC949" : "#D1D5DB")};
   border-radius: 20px;
 `;
 
 const DateSelectButtonText = styled.Text`
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: #fff;
-`;
-
-const NoticeText = styled.Text`
-  font-size: 12px;
-  color: #999;
-  font-weight: 600;
-  margin: 0 20px 12px;
 `;
 
 const StatCard = styled.View`
@@ -598,7 +607,7 @@ const SubTitleText = styled.Text`
 const StatRow = styled.View`
   flex-direction: row;
   align-items: center;
-  padding: 12px 0;
+  padding: 7px 0;
   border-bottom-width: 1px;
   border-bottom-color: #F0F0F0;
   border-style: dashed;
@@ -622,7 +631,7 @@ const RowCount = styled.Text`
 const RowPercent = styled.Text`
   width: 60px;
   font-size: 14px;
-  color: #4A90E2;
+  color: #2F80ED;
   text-align: right;
   font-weight: 500;
 `;

@@ -21,54 +21,148 @@ const iconCalendar = require("../../assets/icon_calendar.png");
 const iconUser = require("../../assets/icon_user.png");
 const iconDeviceId = require("../../assets/icon_device_id.png");
 
+const logAdminHistoryResult = (message, data) => {
+  if (data !== undefined) {
+    console.log(`[ADMIN_HISTORY_RESULT] ${message}`, data);
+  } else {
+    console.log(`[ADMIN_HISTORY_RESULT] ${message}`);
+  }
+};
+
 export default function AdminHistorySearchResultScreen() {
   const navigation = useNavigation();
   const route = useRoute();
 
+  // =========================================================
+  // 기본 검색 정보
+  // AdminHistoryScreen 수정본과 이름 통일
+  // =========================================================
+
   const defaultSearchParams = {
     keyword: "전체",
-    dateRange: "전체 기간",
+    date: "전체 기간",
     userId: "전체 사용자",
-    deviceId: "전체 디바이스",
+    deviceUid: "전체 디바이스",
+
+    apiPayload: {},
+
+    localFilters: {
+      visitTypes: [],
+      situations: [],
+      keywords: [],
+    },
+
+    // 기존 값 호환
     visitTypes: [],
     situations: [],
     keywords: [],
-    apiPayload: {},
   };
 
-  const searchParams = route.params?.searchParams || defaultSearchParams;
+  const searchParams =
+    route.params?.searchParams ||
+    defaultSearchParams;
 
-  const [searchResults, setSearchResults] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [searchResults, setSearchResults] =
+    useState([]);
 
-  useEffect(() => {
-    fetchSearchResults();
-  }, []);
+  const [isLoading, setIsLoading] =
+    useState(true);
 
-  const extractIntercomLogs = (responseData) => {
-    if (Array.isArray(responseData?.data)) return responseData.data;
-    if (Array.isArray(responseData)) return responseData;
-    if (Array.isArray(responseData?.content)) return responseData.content;
-    if (Array.isArray(responseData?.logs)) return responseData.logs;
-    if (Array.isArray(responseData?.items)) return responseData.items;
-    if (Array.isArray(responseData?.data?.content)) {
+  // =========================================================
+  // 응답에서 호출 기록 배열 추출
+  // =========================================================
+
+  const extractIntercomLogs = (
+    responseData
+  ) => {
+    if (
+      Array.isArray(
+        responseData?.data
+      )
+    ) {
+      return responseData.data;
+    }
+
+    if (
+      Array.isArray(responseData)
+    ) {
+      return responseData;
+    }
+
+    if (
+      Array.isArray(
+        responseData?.content
+      )
+    ) {
+      return responseData.content;
+    }
+
+    if (
+      Array.isArray(
+        responseData?.logs
+      )
+    ) {
+      return responseData.logs;
+    }
+
+    if (
+      Array.isArray(
+        responseData?.items
+      )
+    ) {
+      return responseData.items;
+    }
+
+    if (
+      Array.isArray(
+        responseData?.data?.content
+      )
+    ) {
       return responseData.data.content;
     }
-    if (Array.isArray(responseData?.data?.logs)) {
+
+    if (
+      Array.isArray(
+        responseData?.data?.logs
+      )
+    ) {
       return responseData.data.logs;
     }
-    if (Array.isArray(responseData?.data?.items)) {
+
+    if (
+      Array.isArray(
+        responseData?.data?.items
+      )
+    ) {
       return responseData.data.items;
     }
-    if (Array.isArray(responseData?.result)) return responseData.result;
-    if (Array.isArray(responseData?.data?.result)) {
+
+    if (
+      Array.isArray(
+        responseData?.result
+      )
+    ) {
+      return responseData.result;
+    }
+
+    if (
+      Array.isArray(
+        responseData?.data?.result
+      )
+    ) {
       return responseData.data.result;
     }
 
     return [];
   };
 
-  const getLogDateValue = (item = {}) => {
+  // =========================================================
+  // 날짜
+  // =========================================================
+
+  const getLogDateValue = (
+    item = {}
+  ) => {
     return (
       item.createdAt ||
       item.startedAt ||
@@ -78,42 +172,208 @@ export default function AdminHistorySearchResultScreen() {
       item.closedAt ||
       item.completedAt ||
       item.finishedAt ||
+      item.updatedAt ||
       item.timestamp ||
       item.time ||
       ""
     );
   };
 
-  const normalizeStatus = (value) => {
-    return String(value || "")
+  const parseServerDate = (
+    isoString
+  ) => {
+    if (!isoString) {
+      return null;
+    }
+
+    try {
+      const stringValue =
+        String(isoString).trim();
+
+      const hasExplicitTimezone =
+        stringValue.endsWith("Z") ||
+        /[+-]\d{2}:\d{2}$/.test(
+          stringValue
+        );
+
+      if (hasExplicitTimezone) {
+        const date =
+          new Date(stringValue);
+
+        return Number.isNaN(
+          date.getTime()
+        )
+          ? null
+          : date;
+      }
+
+      /**
+       * 백엔드 LocalDateTime
+       * timezone 없는 값을 기기 로컬시간으로 처리
+       */
+      const normalized =
+        stringValue.replace(
+          "T",
+          " "
+        );
+
+      const [
+        datePart,
+        timePart = "00:00:00",
+      ] = normalized.split(" ");
+
+      const [year, month, day] =
+        datePart
+          .split("-")
+          .map(Number);
+
+      const [
+        hour = 0,
+        minute = 0,
+        second = 0,
+      ] = timePart
+        .split(":")
+        .map((item) =>
+          Number(
+            String(item).split(
+              "."
+            )[0]
+          )
+        );
+
+      if (
+        !year ||
+        !month ||
+        !day
+      ) {
+        return null;
+      }
+
+      return new Date(
+        year,
+        month - 1,
+        day,
+        hour,
+        minute,
+        second
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  const formatDateTime = (
+    isoString
+  ) => {
+    const date =
+      parseServerDate(
+        isoString
+      );
+
+    if (
+      !date ||
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      return "";
+    }
+
+    const yyyy =
+      date.getFullYear();
+
+    const mm = String(
+      date.getMonth() + 1
+    ).padStart(2, "0");
+
+    const dd = String(
+      date.getDate()
+    ).padStart(2, "0");
+
+    const hh = String(
+      date.getHours()
+    ).padStart(2, "0");
+
+    const min = String(
+      date.getMinutes()
+    ).padStart(2, "0");
+
+    return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
+  };
+
+  const getSortTime = (
+    item = {}
+  ) => {
+    const date =
+      parseServerDate(
+        getLogDateValue(item)
+      );
+
+    if (
+      !date ||
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      return 0;
+    }
+
+    return date.getTime();
+  };
+
+  // =========================================================
+  // 상태
+  // =========================================================
+
+  const normalizeStatus = (
+    value
+  ) => {
+    return String(
+      value || ""
+    )
       .trim()
       .toUpperCase();
   };
 
-  const getStatusText = (item = {}) => {
-    const status = normalizeStatus(
-      item.status ||
-        item.sessionStatus ||
-        item.callStatus ||
-        item.state ||
-        ""
-    );
+  const getStatusText = (
+    item = {}
+  ) => {
+    const status =
+      normalizeStatus(
+        item.status ||
+          item.sessionStatus ||
+          item.callStatus ||
+          item.state ||
+          ""
+      );
 
-    const connectionStatus = String(item.connectionStatus || "").trim();
-    const sttStatus = String(item.sttStatus || "").trim();
+    const connectionStatus =
+      String(
+        item.connectionStatus ||
+          ""
+      ).trim();
 
-    const hasEndedAt = Boolean(
-      item.endedAt ||
-        item.endTime ||
-        item.closedAt ||
-        item.completedAt ||
-        item.finishedAt
-    );
+    const sttStatus =
+      String(
+        item.sttStatus ||
+          ""
+      ).trim();
+
+    const hasEndedAt =
+      Boolean(
+        item.endedAt ||
+          item.endTime ||
+          item.closedAt ||
+          item.completedAt ||
+          item.finishedAt
+      );
 
     if (
       hasEndedAt ||
-      connectionStatus === "종료" ||
-      sttStatus === "완료" ||
+      connectionStatus ===
+        "종료" ||
+      sttStatus ===
+        "완료" ||
       [
         "SUCCESS",
         "CLOSED",
@@ -127,398 +387,837 @@ export default function AdminHistorySearchResultScreen() {
     }
 
     if (
-      connectionStatus === "미응답" ||
-      sttStatus === "중단" ||
-      ["FAILED", "MISSED", "NO_ANSWER", "CANCELED", "CANCELLED"].includes(
-        status
-      )
+      connectionStatus ===
+        "미응답" ||
+      sttStatus ===
+        "중단" ||
+      [
+        "FAILED",
+        "MISSED",
+        "NO_ANSWER",
+        "CANCELED",
+        "CANCELLED",
+      ].includes(status)
     ) {
       return "미응답 / 중단";
     }
 
     if (
-      connectionStatus === "연결" ||
-      ["ONGOING", "OPEN", "CALLING", "TALKING", "ACTIVE", "CONNECTED"].includes(
-        status
-      )
+      connectionStatus ===
+        "연결" ||
+      [
+        "ONGOING",
+        "OPEN",
+        "CALLING",
+        "TALKING",
+        "ACTIVE",
+        "CONNECTED",
+      ].includes(status)
     ) {
       return "연결 / 진행 중";
     }
 
-    return `${connectionStatus || "확인 필요"} / ${sttStatus || "-"}`;
+    return `${
+      connectionStatus ||
+      "확인 필요"
+    } / ${
+      sttStatus || "-"
+    }`;
   };
 
-  const fetchSearchResults = async () => {
-    try {
-      setIsLoading(true);
+  // =========================================================
+  // 로컬 필터용 전체 텍스트
+  // =========================================================
 
-      const token = await AsyncStorage.getItem("adminToken");
-
-      if (!token) {
-        navigation.navigate("AdminLogin");
-        return;
-      }
-
-      const payload = searchParams.apiPayload || {};
-
-      let response;
-
-      try {
-        response = await axios.get(`${BASE_URL}/api/admin/intercom-logs/search`, {
-          params: payload,
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-      } catch (error) {
-        response = await axios.get(`${BASE_URL}/api/admin/intercom-logs`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-      }
-
-      const rawData = extractIntercomLogs(response.data);
-      const normalizedData = rawData.map((item, index) => ({
-        ...item,
-        id: item.id ?? item.logId ?? item.intercomLogId ?? index,
-        logId: item.logId ?? item.id ?? item.intercomLogId ?? index,
-        sessionId:
-          item.sessionId ??
-          item.callSessionId ??
-          item.intercomSessionId ??
-          item.session?.id ??
-          null,
-      }));
-
-      const filteredData = applyFrontendFilters(normalizedData, searchParams);
-
-      setSearchResults(filteredData);
-    } catch (error) {
-      console.error("검색 결과 조회 실패:", error?.message);
-      Alert.alert("오류", "검색 결과를 불러오지 못했습니다.");
-      setSearchResults([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const applyFrontendFilters = (list, params) => {
-    const payload = params.apiPayload || {};
-
-    return list.filter((item) => {
-      const targetText = getSearchTargetText(item);
-
-      if (
-        payload.keyword &&
-        !targetText.includes(String(payload.keyword).toLowerCase())
-      ) {
-        return false;
-      }
-
-      if (
-        payload.userId &&
-        !String(item.userId || item.providerUserId || item.residentId || "")
-          .toLowerCase()
-          .includes(String(payload.userId).toLowerCase())
-      ) {
-        return false;
-      }
-
-      if (
-        payload.deviceUid &&
-        !String(item.deviceUid || item.deviceId || item.device?.deviceUid || "")
-          .toLowerCase()
-          .includes(String(payload.deviceUid).toLowerCase())
-      ) {
-        return false;
-      }
-
-      if (payload.date && !isSameDate(item, payload.date)) {
-        return false;
-      }
-
-      const selectedVisitTypes = Array.isArray(params.visitTypes)
-        ? params.visitTypes
-        : [];
-
-      if (selectedVisitTypes.length > 0) {
-        const hasVisitType = selectedVisitTypes.some((tag) =>
-          targetText.includes(String(tag).toLowerCase())
-        );
-
-        if (!hasVisitType) return false;
-      }
-
-      const selectedSituations = Array.isArray(params.situations)
-        ? params.situations
-        : [];
-
-      if (selectedSituations.length > 0) {
-        const hasSituation = selectedSituations.some((tag) => {
-          const safeTag = String(tag).toLowerCase();
-
-          if (tag === "미응답") {
-            return getStatusText(item) === "미응답 / 중단";
-          }
-
-          return targetText.includes(safeTag);
-        });
-
-        if (!hasSituation) return false;
-      }
-
-      const selectedKeywords = Array.isArray(params.keywords)
-        ? params.keywords
-        : [];
-
-      if (selectedKeywords.length > 0) {
-        const hasKeyword = selectedKeywords.some((tag) =>
-          targetText.includes(String(tag).toLowerCase())
-        );
-
-        if (!hasKeyword) return false;
-      }
-
-      return true;
-    });
-  };
-
-  const getSearchTargetText = (item) => {
+  const getSearchTargetText = (
+    item = {}
+  ) => {
     return [
       item.summary,
       item.visitorText,
       item.residentReply,
       item.refinedText,
+      item.originalText,
       item.content,
       item.message,
       item.transcript,
       item.intent,
       item.category,
       item.deviceUid,
-      item.deviceId,
-      item.userId,
-      item.providerUserId,
-      item.residentId,
       item.status,
       item.sessionStatus,
       item.callStatus,
       item.connectionStatus,
       item.sttStatus,
       item.location,
-      item.endedAt,
-      item.endTime,
-      item.closedAt,
     ]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
   };
 
-  const isSameDate = (item, selectedDate) => {
-    const formattedCreatedAt = formatDateOnly(getLogDateValue(item));
-    const normalizedSelectedDate = normalizeDateInput(selectedDate);
+  // =========================================================
+  // 서버가 지원하지 않는 UI 필터만 프론트에서 적용
+  //
+  // ★ 중요
+  //
+  // 아래 항목은 여기서 다시 필터링하지 않는다.
+  //
+  // keyword
+  // userId
+  // deviceUid
+  // date
+  //
+  // 이미 서버 /search가 처리했기 때문.
+  //
+  // 특히 IntercomLogResponse에 userId가 없을 수 있으므로
+  // 프론트에서 userId를 다시 검사하면 정상 결과가 전부 사라짐.
+  // =========================================================
 
-    if (!formattedCreatedAt || !normalizedSelectedDate) {
-      return true;
-    }
+  const applyLocalFilters = (
+    list
+  ) => {
+    const localFilters =
+      searchParams.localFilters ||
+      {};
 
-    return formattedCreatedAt === normalizedSelectedDate;
-  };
+    const selectedVisitTypes =
+      Array.isArray(
+        localFilters.visitTypes
+      )
+        ? localFilters.visitTypes
+        : Array.isArray(
+            searchParams.visitTypes
+          )
+          ? searchParams.visitTypes
+          : [];
 
-  const normalizeDateInput = (value) => {
-    if (!value) return "";
+    const selectedSituations =
+      Array.isArray(
+        localFilters.situations
+      )
+        ? localFilters.situations
+        : Array.isArray(
+            searchParams.situations
+          )
+          ? searchParams.situations
+          : [];
 
-    const matched = String(value).match(/\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
+    const selectedKeywords =
+      Array.isArray(
+        localFilters.keywords
+      )
+        ? localFilters.keywords
+        : Array.isArray(
+            searchParams.keywords
+          )
+          ? searchParams.keywords
+          : [];
 
-    if (!matched) return "";
+    return list.filter(
+      (item) => {
+        const targetText =
+          getSearchTargetText(
+            item
+          );
 
-    const [year, month, day] = matched[0].split(/[-/.]/).map(Number);
+        // =============================================
+        // 방문 유형
+        // =============================================
 
-    if (!year || !month || !day) return "";
+        if (
+          selectedVisitTypes.length >
+          0
+        ) {
+          const hasVisitType =
+            selectedVisitTypes.some(
+              (tag) =>
+                targetText.includes(
+                  String(
+                    tag
+                  ).toLowerCase()
+                )
+            );
 
-    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(
-      2,
-      "0"
-    )}`;
-  };
+          if (!hasVisitType) {
+            return false;
+          }
+        }
 
-  const parseServerDate = (isoString) => {
-    if (!isoString) return null;
+        // =============================================
+        // 상황 성격
+        // =============================================
 
-    try {
-      const stringValue = String(isoString).trim();
+        if (
+          selectedSituations.length >
+          0
+        ) {
+          const hasSituation =
+            selectedSituations.some(
+              (tag) => {
+                const safeTag =
+                  String(
+                    tag
+                  ).toLowerCase();
 
-      const hasExplicitTimezone =
-        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
+                /**
+                 * 미응답은 상태값으로도 판정
+                 */
+                if (
+                  tag === "미응답"
+                ) {
+                  return (
+                    getStatusText(
+                      item
+                    ) ===
+                    "미응답 / 중단"
+                  );
+                }
 
-      if (hasExplicitTimezone) {
-        const date = new Date(stringValue);
-        return Number.isNaN(date.getTime()) ? null : date;
+                return targetText.includes(
+                  safeTag
+                );
+              }
+            );
+
+          if (
+            !hasSituation
+          ) {
+            return false;
+          }
+        }
+
+        // =============================================
+        // 세부 키워드
+        // =============================================
+
+        if (
+          selectedKeywords.length >
+          0
+        ) {
+          /**
+           * 여러 개 선택했을 경우
+           * 하나라도 포함되면 표시 (OR)
+           */
+          const hasKeyword =
+            selectedKeywords.some(
+              (tag) =>
+                targetText.includes(
+                  String(
+                    tag
+                  ).toLowerCase()
+                )
+            );
+
+          if (!hasKeyword) {
+            return false;
+          }
+        }
+
+        return true;
       }
+    );
+  };
 
-      const normalized = stringValue.replace("T", " ");
-      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
-      const [year, month, day] = datePart.split("-").map(Number);
-      const [hour = 0, minute = 0, second = 0] = timePart
-        .split(":")
-        .map((item) => Number(String(item).split(".")[0]));
+  // =========================================================
+  // 검색 API
+  // =========================================================
 
-      if (!year || !month || !day) return null;
+  const fetchSearchResults =
+    async () => {
+      try {
+        setIsLoading(true);
 
-      return new Date(year, month - 1, day, hour, minute, second);
-    } catch {
-      return null;
+        const token =
+          await AsyncStorage.getItem(
+            "adminToken"
+          );
+
+        if (!token) {
+          Alert.alert(
+            "로그인 필요",
+            "관리자 로그인이 필요합니다.",
+            [
+              {
+                text: "확인",
+                onPress: () => {
+                  navigation.reset({
+                    index: 0,
+                    routes: [
+                      {
+                        name:
+                          "AdminLogin",
+                      },
+                    ],
+                  });
+                },
+              },
+            ]
+          );
+
+          return;
+        }
+
+        /**
+         * AdminHistoryScreen에서
+         * 백엔드가 실제 지원하는 값만 만들어서 넘겨줌.
+         *
+         * 예:
+         *
+         * {
+         *   keyword: "택배",
+         *   date: "2026-08-11",
+         *   userId: 3,
+         *   deviceUid: "DEVICE-001"
+         * }
+         */
+        const payload =
+          searchParams.apiPayload ||
+          {};
+
+        logAdminHistoryResult(
+          "검색 API 요청",
+          payload
+        );
+
+        /**
+         * ★ 검색 실패했다고 전체 로그 API로 fallback 하지 않는다.
+         *
+         * 기존 코드에서는 /search가 400이어도
+         * /admin/intercom-logs 전체를 받아온 뒤
+         * 프론트에서 억지로 필터링했음.
+         *
+         * 특히 userId는 응답 DTO에 없어서
+         * 결과를 제대로 복구할 수도 없음.
+         *
+         * API 오류는 오류로 표시하는 게 맞음.
+         */
+        const response =
+          await axios.get(
+            `${BASE_URL}/api/admin/intercom-logs/search`,
+            {
+              params: payload,
+
+              headers: {
+                Authorization:
+                  `Bearer ${token}`,
+              },
+
+              timeout: 10000,
+            }
+          );
+
+        logAdminHistoryResult(
+          "검색 API 응답",
+          {
+            status:
+              response.status,
+
+            success:
+              response.data
+                ?.success,
+          }
+        );
+
+        const rawData =
+          extractIntercomLogs(
+            response.data
+          );
+
+        /**
+         * 화면에서 공통적으로 사용할 ID 정리
+         */
+        const normalizedData =
+          rawData.map(
+            (
+              item,
+              index
+            ) => ({
+              ...item,
+
+              id:
+                item.id ??
+                item.logId ??
+                item.intercomLogId ??
+                index,
+
+              logId:
+                item.logId ??
+                item.id ??
+                item.intercomLogId ??
+                index,
+
+              sessionId:
+                item.sessionId ??
+                item.callSessionId ??
+                item.intercomSessionId ??
+                item.session
+                  ?.id ??
+                null,
+            })
+          );
+
+        /**
+         * 최신 순 정렬
+         */
+        const sortedData =
+          normalizedData.sort(
+            (a, b) =>
+              getSortTime(b) -
+              getSortTime(a)
+          );
+
+        /**
+         * 서버가 지원하지 않는 UI 필터만 적용
+         */
+        const filteredData =
+          applyLocalFilters(
+            sortedData
+          );
+
+        logAdminHistoryResult(
+          "검색 결과 처리 완료",
+          {
+            serverCount:
+              normalizedData.length,
+
+            displayedCount:
+              filteredData.length,
+
+            localFilters:
+              searchParams.localFilters,
+          }
+        );
+
+        setSearchResults(
+          filteredData
+        );
+      } catch (error) {
+        const status =
+          error.response
+            ?.status;
+
+        const serverError =
+          error.response?.data
+            ?.message ||
+          error.response?.data
+            ?.error ||
+          error.message;
+
+        console.error(
+          "[ADMIN_HISTORY_RESULT] 검색 결과 조회 실패:",
+          {
+            status,
+            error:
+              serverError,
+          }
+        );
+
+        setSearchResults([]);
+
+        if (
+          status === 401 ||
+          status === 403
+        ) {
+          await AsyncStorage.removeItem(
+            "adminToken"
+          );
+
+          Alert.alert(
+            "로그인 만료",
+            "관리자 로그인 정보가 만료되었습니다.",
+            [
+              {
+                text: "확인",
+
+                onPress: () => {
+                  navigation.reset({
+                    index: 0,
+                    routes: [
+                      {
+                        name:
+                          "AdminLogin",
+                      },
+                    ],
+                  });
+                },
+              },
+            ]
+          );
+
+          return;
+        }
+
+        if (
+          status === 400
+        ) {
+          Alert.alert(
+            "검색 조건 오류",
+            serverError ||
+              "검색 조건을 확인해주세요."
+          );
+
+          return;
+        }
+
+        Alert.alert(
+          "오류",
+          serverError ||
+            "검색 결과를 불러오지 못했습니다."
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+  // =========================================================
+  // 화면 진입 / 검색조건 변경
+  // =========================================================
+
+  useEffect(() => {
+    fetchSearchResults();
+  }, [
+    route.params?.refreshKey,
+  ]);
+
+  // =========================================================
+  // 제목
+  // =========================================================
+
+  const getItemTitle = (
+    item = {}
+  ) => {
+    const summary =
+      String(
+        item.summary || ""
+      ).trim();
+
+    const intent =
+      String(
+        item.intent || ""
+      ).trim();
+
+    const visitorText =
+      String(
+        item.visitorText ||
+          ""
+      ).trim();
+
+    const content =
+      String(
+        item.content || ""
+      ).trim();
+
+    const message =
+      String(
+        item.message || ""
+      ).trim();
+
+    const deviceUid =
+      String(
+        item.deviceUid ||
+          ""
+      ).trim();
+
+    if (
+      summary &&
+      summary !==
+        "내용 없음"
+    ) {
+      return summary;
     }
-  };
 
-  const formatDateOnly = (isoString) => {
-    const date = parseServerDate(isoString);
+    if (intent) {
+      return intent;
+    }
 
-    if (!date || Number.isNaN(date.getTime())) return "";
+    if (visitorText) {
+      return visitorText;
+    }
 
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
+    if (content) {
+      return content;
+    }
 
-    return `${yyyy}-${mm}-${dd}`;
-  };
+    if (message) {
+      return message;
+    }
 
-  const formatDateTime = (isoString) => {
-    const date = parseServerDate(isoString);
-
-    if (!date || Number.isNaN(date.getTime())) return "";
-
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    const hh = String(date.getHours()).padStart(2, "0");
-    const min = String(date.getMinutes()).padStart(2, "0");
-
-    return `${yyyy}/${mm}/${dd} ${hh}:${min}`;
-  };
-
-  const getItemTitle = (item) => {
-    const summary = String(item.summary || "").trim();
-    const intent = String(item.intent || "").trim();
-    const visitorText = String(item.visitorText || "").trim();
-    const content = String(item.content || "").trim();
-    const message = String(item.message || "").trim();
-    const deviceUid = String(item.deviceUid || "").trim();
-
-    if (summary && summary !== "내용 없음") return summary;
-    if (intent) return intent;
-    if (visitorText) return visitorText;
-    if (content) return content;
-    if (message) return message;
-    if (deviceUid) return deviceUid;
+    if (deviceUid) {
+      return deviceUid;
+    }
 
     return "인터폰 호출 알림";
   };
 
-  const handlePressItem = (item) => {
-    navigation.navigate("AdminHistoryDetail", {
-      item,
-      logId: item.id || item.logId,
-      sessionId: item.sessionId,
-    });
+  // =========================================================
+  // 상세 화면 이동
+  // =========================================================
+
+  const handlePressItem = (
+    item
+  ) => {
+    logAdminHistoryResult(
+      "상세 화면 이동",
+      {
+        logId:
+          item.logId ||
+          item.id,
+
+        sessionId:
+          item.sessionId,
+      }
+    );
+
+    navigation.navigate(
+      "AdminHistoryDetail",
+      {
+        item,
+
+        logId:
+          item.logId ||
+          item.id,
+
+        sessionId:
+          item.sessionId,
+      }
+    );
   };
+
+  // =========================================================
+  // 화면
+  // =========================================================
 
   return (
     <Container>
+      {/* ================= HEADER ================= */}
+
       <Header>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <BackIcon source={backIcon} resizeMode="contain" />
+        <TouchableOpacity
+          onPress={() =>
+            navigation.goBack()
+          }
+        >
+          <BackIcon
+            source={backIcon}
+            resizeMode="contain"
+          />
         </TouchableOpacity>
 
-        <HeaderTitle>기록 검색 결과</HeaderTitle>
+        <HeaderTitle>
+          기록 검색 결과
+        </HeaderTitle>
 
-        <View style={{ width: 24 }} />
+        <View
+          style={{
+            width: 24,
+          }}
+        />
       </Header>
 
       <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 40 }}
+        showsVerticalScrollIndicator={
+          false
+        }
+        contentContainerStyle={{
+          paddingBottom: 40,
+        }}
       >
+        {/* ================= 검색 조건 ================= */}
+
         <SummaryCard>
+          {/* 키워드 */}
+
           <SummaryRow>
-            <SummaryIcon source={iconKeyword} resizeMode="contain" />
+            <SummaryIcon
+              source={
+                iconKeyword
+              }
+              resizeMode="contain"
+            />
+
             <KeywordBadge>
-              <KeywordBadgeText>{searchParams.keyword}</KeywordBadgeText>
+              <KeywordBadgeText>
+                {searchParams.keyword ||
+                  "전체"}
+              </KeywordBadgeText>
             </KeywordBadge>
           </SummaryRow>
 
-          <SummaryRow>
-            <SummaryIcon source={iconCalendar} resizeMode="contain" />
-            <SummaryText>{searchParams.dateRange}</SummaryText>
-          </SummaryRow>
+          {/* 날짜 */}
 
           <SummaryRow>
-            <SummaryIcon source={iconUser} resizeMode="contain" />
-            <SummaryText>{searchParams.userId}</SummaryText>
+            <SummaryIcon
+              source={
+                iconCalendar
+              }
+              resizeMode="contain"
+            />
+
+            <SummaryText>
+              {searchParams.date ||
+                "전체 기간"}
+            </SummaryText>
           </SummaryRow>
 
-          <SummaryRow style={{ marginBottom: 0 }}>
-            <SummaryIcon source={iconDeviceId} resizeMode="contain" />
-            <SummaryText>{searchParams.deviceId}</SummaryText>
+          {/* 사용자 ID */}
+
+          <SummaryRow>
+            <SummaryIcon
+              source={
+                iconUser
+              }
+              resizeMode="contain"
+            />
+
+            <SummaryText>
+              {searchParams.userId ||
+                "전체 사용자"}
+            </SummaryText>
+          </SummaryRow>
+
+          {/* Device UID */}
+
+          <SummaryRow
+            style={{
+              marginBottom: 0,
+            }}
+          >
+            <SummaryIcon
+              source={
+                iconDeviceId
+              }
+              resizeMode="contain"
+            />
+
+            <SummaryText>
+              {searchParams.deviceUid ||
+                "전체 디바이스"}
+            </SummaryText>
           </SummaryRow>
         </SummaryCard>
 
+        {/* ================= RESULT ================= */}
+
         {isLoading ? (
           <LoadingWrapper>
-            <ActivityIndicator size="large" color="#1EC949" />
+            <ActivityIndicator
+              size="large"
+              color="#1EC949"
+            />
           </LoadingWrapper>
-        ) : searchResults.length > 0 ? (
+        ) : searchResults.length >
+          0 ? (
           <ResultCardContainer>
-            {searchResults.map((item, index) => {
-              const isLast = index === searchResults.length - 1;
+            {searchResults.map(
+              (
+                item,
+                index
+              ) => {
+                const isLast =
+                  index ===
+                  searchResults.length -
+                    1;
 
-              return (
-                <TouchableOpacity
-                  key={item.id || item.logId || index}
-                  activeOpacity={0.7}
-                  onPress={() => handlePressItem(item)}
-                >
-                  <ListItem style={isLast ? { borderBottomWidth: 0 } : {}}>
-                    <IconCircle>
-                      <Ionicons
-                        name="call"
-                        size={18}
-                        color="#fff"
-                        style={{ transform: [{ rotate: "135deg" }] }}
-                      />
-                    </IconCircle>
+                return (
+                  <TouchableOpacity
+                    key={
+                      item.logId ??
+                      item.id ??
+                      index
+                    }
+                    activeOpacity={
+                      0.7
+                    }
+                    onPress={() =>
+                      handlePressItem(
+                        item
+                      )
+                    }
+                  >
+                    <ListItem
+                      style={
+                        isLast
+                          ? {
+                              borderBottomWidth: 0,
+                            }
+                          : {}
+                      }
+                    >
+                      <IconCircle>
+                        <Ionicons
+                          name="call"
+                          size={18}
+                          color="#fff"
+                          style={{
+                            transform: [
+                              {
+                                rotate:
+                                  "135deg",
+                              },
+                            ],
+                          }}
+                        />
+                      </IconCircle>
 
-                    <ItemContent>
-                      <ItemTopRow>
-                        <ItemTitle numberOfLines={1}>
-                          {getItemTitle(item)}
-                        </ItemTitle>
-                        <DurationText>{getStatusText(item)}</DurationText>
-                      </ItemTopRow>
+                      <ItemContent>
+                        <ItemTopRow>
+                          <ItemTitle
+                            numberOfLines={
+                              1
+                            }
+                          >
+                            {getItemTitle(
+                              item
+                            )}
+                          </ItemTitle>
 
-                      <ItemBottomRow>
-                        <KeywordBadge
-                          style={{ paddingVertical: 3, paddingHorizontal: 8 }}
-                        >
-                          <KeywordBadgeText>
-                            {item.intent || "호출"}
-                          </KeywordBadgeText>
-                        </KeywordBadge>
+                          <DurationText>
+                            {getStatusText(
+                              item
+                            )}
+                          </DurationText>
+                        </ItemTopRow>
 
-                        <ItemTime>
-                          {formatDateTime(getLogDateValue(item))}
-                        </ItemTime>
-                      </ItemBottomRow>
-                    </ItemContent>
-                  </ListItem>
-                </TouchableOpacity>
-              );
-            })}
+                        <ItemBottomRow>
+                          <KeywordBadge
+                            style={{
+                              paddingVertical: 3,
+                              paddingHorizontal: 8,
+                            }}
+                          >
+                            <KeywordBadgeText>
+                              {item.intent ||
+                                "호출"}
+                            </KeywordBadgeText>
+                          </KeywordBadge>
+
+                          <ItemTime>
+                            {formatDateTime(
+                              getLogDateValue(
+                                item
+                              )
+                            )}
+                          </ItemTime>
+                        </ItemBottomRow>
+                      </ItemContent>
+                    </ListItem>
+                  </TouchableOpacity>
+                );
+              }
+            )}
           </ResultCardContainer>
         ) : (
           <EmptyWrapper>
-            <EmptyText>설정한 조건에 맞는 기록이 없습니다.</EmptyText>
+            <Ionicons
+              name="search-outline"
+              size={38}
+              color="#CCC"
+            />
+
+            <EmptyText>
+              설정한 조건에 맞는 기록이 없습니다.
+            </EmptyText>
           </EmptyWrapper>
         )}
       </ScrollView>
@@ -526,9 +1225,15 @@ export default function AdminHistorySearchResultScreen() {
   );
 }
 
-const Container = styled(SafeAreaContainer)`
+// =========================================================
+// STYLE
+// =========================================================
+
+const Container = styled(
+  SafeAreaContainer
+)`
   flex: 1;
-  background-color: #F4F5F7;
+  background-color: #f4f5f7;
 `;
 
 const Header = styled.View`
@@ -536,7 +1241,7 @@ const Header = styled.View`
   justify-content: space-between;
   align-items: center;
   padding: 15px 20px;
-  background-color: #F4F5F7;
+  background-color: #f4f5f7;
 `;
 
 const BackIcon = styled.Image`
@@ -582,7 +1287,7 @@ const SummaryText = styled.Text`
 `;
 
 const KeywordBadge = styled.View`
-  background-color: #F4F5F7;
+  background-color: #f4f5f7;
   padding: 4px 10px;
   border-radius: 8px;
 `;
@@ -609,14 +1314,14 @@ const ListItem = styled.View`
   align-items: center;
   padding: 18px 0;
   border-bottom-width: 1px;
-  border-bottom-color: #F0F0F0;
+  border-bottom-color: #f0f0f0;
 `;
 
 const IconCircle = styled.View`
   width: 44px;
   height: 44px;
   border-radius: 22px;
-  background-color: #1EC949;
+  background-color: #1ec949;
   justify-content: center;
   align-items: center;
   margin-right: 15px;
@@ -643,7 +1348,7 @@ const ItemTitle = styled.Text`
 
 const DurationText = styled.Text`
   font-size: 13px;
-  color: #A0AEC0;
+  color: #a0aec0;
   font-weight: 600;
 `;
 
@@ -673,4 +1378,6 @@ const EmptyText = styled.Text`
   font-size: 14px;
   color: #999;
   font-weight: 500;
+  margin-top: 12px;
+  text-align: center;
 `;

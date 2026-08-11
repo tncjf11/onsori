@@ -25,6 +25,12 @@ import AdminMessageEditScreen from "../screens/admin/AdminMessageEditScreen";
 import AdminMonitoringDetailScreen from "../screens/admin/AdminMonitoringDetailScreen";
 import AdminTabNavigator from "./AdminTabNavigator";
 
+/*
+ * 임시 API 속도 측정기
+ * 테스트 완료 후 이 import와 아래 <Test />만 삭제하면 됩니다.
+ */
+import Test from "../api/Test";
+
 const Stack = createNativeStackNavigator();
 
 export default function RootNavigator() {
@@ -63,73 +69,123 @@ export default function RootNavigator() {
 
   if (!initialRoute) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-          backgroundColor: "#F8F9FA",
-        }}
-      >
-        <ActivityIndicator size="large" color="#06F393" />
-      </View>
+      <>
+        <View
+          style={{
+            flex: 1,
+            justifyContent: "center",
+            alignItems: "center",
+            backgroundColor: "#F8F9FA",
+          }}
+        >
+          <ActivityIndicator size="large" color="#06F393" />
+        </View>
+
+        {__DEV__ && <Test />}
+      </>
     );
   }
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator
-        initialRouteName={initialRoute}
-        screenOptions={{
-          headerShown: false,
-          animation: "fade",
-        }}
-      >
-        <Stack.Screen name="ResidentLogin" component={ResidentLoginScreen} />
-        <Stack.Screen name="QrVerify" component={QrVerifyScreen} />
-        <Stack.Screen name="MainTab" component={MainTabNavigator} />
-        <Stack.Screen name="IntercomChat" component={IntercomChatScreen} />
-        <Stack.Screen name="End" component={EndScreen} />
-        <Stack.Screen name="HistorySearch" component={HistorySearchScreen} />
-        <Stack.Screen
-          name="HistorySearchResult"
-          component={HistorySearchResultScreen}
-        />
-        <Stack.Screen name="DeviceSetting" component={DeviceSettingScreen} />
-        <Stack.Screen name="TermsPolicy" component={TermsPolicyScreen} />
+    <>
+      <NavigationContainer>
+        <Stack.Navigator
+          initialRouteName={initialRoute}
+          screenOptions={{
+            headerShown: false,
+            animation: "fade",
+          }}
+        >
+          <Stack.Screen
+            name="ResidentLogin"
+            component={ResidentLoginScreen}
+          />
 
-        <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
-        <Stack.Screen name="AdminDashboard" component={AdminTabNavigator} />
-        <Stack.Screen name="AdminCallLog" component={AdminCallLogScreen} />
+          <Stack.Screen name="QrVerify" component={QrVerifyScreen} />
 
-        <Stack.Screen
-          name="AdminHistorySearchResult"
-          component={AdminHistorySearchResultScreen}
-        />
+          <Stack.Screen name="MainTab" component={MainTabNavigator} />
 
-        <Stack.Screen
-          name="AdminHistoryDetail"
-          component={AdminHistoryDetailScreen}
-        />
+          <Stack.Screen
+            name="IntercomChat"
+            component={IntercomChatScreen}
+          />
 
-        <Stack.Screen name="AdminBtnStat" component={AdminBtnStatScreen} />
-        <Stack.Screen
-          name="AdminMonitoringDetail"
-          component={AdminMonitoringDetailScreen}
-        />
-        <Stack.Screen
-          name="AdminMessageEdit"
-          component={AdminMessageEditScreen}
-        />
-        <Stack.Screen
-          name="AdminDeviceSearch"
-          component={AdminDeviceSearchScreen}
-        />
-        <Stack.Screen
-          name="AdminDeviceDetail"
-          component={AdminDeviceDetailScreen}
-        />
-      </Stack.Navigator>
-    </NavigationContainer>
+          <Stack.Screen name="End" component={EndScreen} />
+
+          <Stack.Screen
+            name="HistorySearch"
+            component={HistorySearchScreen}
+          />
+
+          <Stack.Screen
+            name="HistorySearchResult"
+            component={HistorySearchResultScreen}
+          />
+
+          <Stack.Screen
+            name="DeviceSetting"
+            component={DeviceSettingScreen}
+          />
+
+          <Stack.Screen
+            name="TermsPolicy"
+            component={TermsPolicyScreen}
+          />
+
+          <Stack.Screen
+            name="AdminLogin"
+            component={AdminLoginScreen}
+          />
+
+          <Stack.Screen
+            name="AdminDashboard"
+            component={AdminTabNavigator}
+          />
+
+          <Stack.Screen
+            name="AdminCallLog"
+            component={AdminCallLogScreen}
+          />
+
+          <Stack.Screen
+            name="AdminHistorySearchResult"
+            component={AdminHistorySearchResultScreen}
+          />
+
+          <Stack.Screen
+            name="AdminHistoryDetail"
+            component={AdminHistoryDetailScreen}
+          />
+
+          <Stack.Screen
+            name="AdminBtnStat"
+            component={AdminBtnStatScreen}
+          />
+
+          <Stack.Screen
+            name="AdminMonitoringDetail"
+            component={AdminMonitoringDetailScreen}
+          />
+
+          <Stack.Screen
+            name="AdminMessageEdit"
+            component={AdminMessageEditScreen}
+          />
+
+          <Stack.Screen
+            name="AdminDeviceSearch"
+            component={AdminDeviceSearchScreen}
+          />
+
+          <Stack.Screen
+            name="AdminDeviceDetail"
+            component={AdminDeviceDetailScreen}
+          />
+        </Stack.Navigator>
+      </NavigationContainer>
+
+      {/* 모든 화면 위에 표시되는 임시 API 속도 측정기 */}
+      {__DEV__ && <Test />}
+    </>
   );
 }

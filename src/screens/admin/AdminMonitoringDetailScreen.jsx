@@ -1,20 +1,23 @@
-import React, { useState, useEffect, useRef } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
+  useIsFocused,
+  useNavigation,
+  useRoute,
+} from "@react-navigation/native";
+import axios from "axios";
+import { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   TouchableOpacity,
   View,
-  ActivityIndicator,
-  Alert,
 } from "react-native";
-import styled from "styled-components/native";
 import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
-import {
-  useNavigation,
-  useRoute,
-  useIsFocused,
-} from "@react-navigation/native";
-import axios from "axios";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import styled from "styled-components/native";
 
 import BASE_URL from "../../api/config";
 
@@ -48,6 +51,7 @@ export default function AdminMonitoringDetailScreen() {
   const route = useRoute();
   const isFocused = useIsFocused();
 
+  const chatScrollRef = useRef(null);
   const lastMessageSignatureRef = useRef(null);
   const isMountedRef = useRef(true);
   const endedSessionRef = useRef(false);
@@ -119,6 +123,7 @@ export default function AdminMonitoringDetailScreen() {
   const updateEndedSessionRef = (source = sessionInfo) => {
     const ended = isEndedSession(source);
     endedSessionRef.current = ended;
+
     return ended;
   };
 
@@ -215,11 +220,23 @@ export default function AdminMonitoringDetailScreen() {
     return Array.from(uniqueMap.values());
   };
 
-  const logMessageUpdateIfChanged = (messages, nextSessionInfo = sessionInfo) => {
+  const scrollChatToBottom = (animated = true) => {
+    requestAnimationFrame(() => {
+      chatScrollRef.current?.scrollToEnd({
+        animated,
+      });
+    });
+  };
+
+  const logMessageUpdateIfChanged = (
+    messages,
+    nextSessionInfo = sessionInfo
+  ) => {
     const signature = messages
       .map((msg, idx) => {
         const id = getMessageId(msg, idx);
         const text = getMessageText(msg);
+
         return `${id}:${text}`;
       })
       .join("|");
@@ -245,11 +262,25 @@ export default function AdminMonitoringDetailScreen() {
   };
 
   const extractMessages = (data = {}) => {
-    if (Array.isArray(data.messages)) return data.messages;
-    if (Array.isArray(data.conversationMessages)) return data.conversationMessages;
-    if (Array.isArray(data.transcripts)) return data.transcripts;
-    if (Array.isArray(data.sttMessages)) return data.sttMessages;
-    if (Array.isArray(data.logs)) return data.logs;
+    if (Array.isArray(data.messages)) {
+      return data.messages;
+    }
+
+    if (Array.isArray(data.conversationMessages)) {
+      return data.conversationMessages;
+    }
+
+    if (Array.isArray(data.transcripts)) {
+      return data.transcripts;
+    }
+
+    if (Array.isArray(data.sttMessages)) {
+      return data.sttMessages;
+    }
+
+    if (Array.isArray(data.logs)) {
+      return data.logs;
+    }
 
     return [];
   };
@@ -272,6 +303,7 @@ export default function AdminMonitoringDetailScreen() {
     try {
       if (!isSilent && isMountedRef.current) {
         setIsLoading(true);
+
         logMonitoringDetail("상세 초기 조회 시작", {
           sessionId: targetSessionId,
         });
@@ -307,7 +339,10 @@ export default function AdminMonitoringDetailScreen() {
           ...data,
         };
 
-        const normalizedMessages = normalizeMessages(extractMessages(data));
+        const normalizedMessages = normalizeMessages(
+          extractMessages(data)
+        );
+
         const ended = updateEndedSessionRef(nextSessionInfo);
 
         if (isMountedRef.current) {
@@ -315,30 +350,40 @@ export default function AdminMonitoringDetailScreen() {
           setChatMessages(normalizedMessages);
         }
 
-        logMessageUpdateIfChanged(normalizedMessages, nextSessionInfo);
+        logMessageUpdateIfChanged(
+          normalizedMessages,
+          nextSessionInfo
+        );
 
         if (ended) {
-          logMonitoringDetail("종료된 세션 감지 - polling 중단 대상", {
-            sessionId: targetSessionId,
-            status: getSessionStatus(nextSessionInfo),
-            endedAt:
-              nextSessionInfo.endedAt ||
-              nextSessionInfo.endTime ||
-              nextSessionInfo.closedAt ||
-              null,
-          });
+          logMonitoringDetail(
+            "종료된 세션 감지 - polling 중단 대상",
+            {
+              sessionId: targetSessionId,
+              status: getSessionStatus(nextSessionInfo),
+              endedAt:
+                nextSessionInfo.endedAt ||
+                nextSessionInfo.endTime ||
+                nextSessionInfo.closedAt ||
+                null,
+            }
+          );
         }
 
         return;
       }
 
-      logMonitoringDetail("상세 조회 응답 확인 필요", response.data);
+      logMonitoringDetail(
+        "상세 조회 응답 확인 필요",
+        response.data
+      );
 
       if (isMountedRef.current) {
         setChatMessages([]);
       }
     } catch (error) {
       const serverStatus = error.response?.status;
+
       const serverError =
         error.response?.data?.message ||
         JSON.stringify(error.response?.data) ||
@@ -366,7 +411,10 @@ export default function AdminMonitoringDetailScreen() {
       }
 
       if (!isSilent) {
-        Alert.alert("오류", "실시간 통화 정보를 불러오지 못했습니다.");
+        Alert.alert(
+          "오류",
+          "실시간 통화 정보를 불러오지 못했습니다."
+        );
       }
     } finally {
       if (!isSilent && isMountedRef.current) {
@@ -385,6 +433,26 @@ export default function AdminMonitoringDetailScreen() {
   }, []);
 
   useEffect(() => {
+    const keyboardShowEvent =
+      Platform.OS === "ios"
+        ? "keyboardWillShow"
+        : "keyboardDidShow";
+
+    const keyboardSubscription = Keyboard.addListener(
+      keyboardShowEvent,
+      () => {
+        setTimeout(() => {
+          scrollChatToBottom(true);
+        }, 100);
+      }
+    );
+
+    return () => {
+      keyboardSubscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     if (isFocused) {
       logMonitoringDetail("화면 포커스", {
         sessionId: targetSessionId,
@@ -397,11 +465,18 @@ export default function AdminMonitoringDetailScreen() {
   useEffect(() => {
     if (!isFocused || !targetSessionId) return;
 
-    if (isEndedSession(sessionInfo) || endedSessionRef.current) {
-      logMonitoringDetail("종료된 세션 - polling 시작 안 함", {
-        sessionId: targetSessionId,
-        status: getSessionStatus(sessionInfo),
-      });
+    if (
+      isEndedSession(sessionInfo) ||
+      endedSessionRef.current
+    ) {
+      logMonitoringDetail(
+        "종료된 세션 - polling 시작 안 함",
+        {
+          sessionId: targetSessionId,
+          status: getSessionStatus(sessionInfo),
+        }
+      );
+
       return;
     }
 
@@ -411,13 +486,19 @@ export default function AdminMonitoringDetailScreen() {
     });
 
     const intervalId = setInterval(() => {
-      if (endedSessionRef.current || isEndedSession(sessionInfo)) {
+      if (
+        endedSessionRef.current ||
+        isEndedSession(sessionInfo)
+      ) {
         clearInterval(intervalId);
 
-        logMonitoringDetail("종료된 세션 감지 - polling 중지", {
-          sessionId: targetSessionId,
-          status: getSessionStatus(sessionInfo),
-        });
+        logMonitoringDetail(
+          "종료된 세션 감지 - polling 중지",
+          {
+            sessionId: targetSessionId,
+            status: getSessionStatus(sessionInfo),
+          }
+        );
 
         return;
       }
@@ -427,6 +508,7 @@ export default function AdminMonitoringDetailScreen() {
 
     return () => {
       clearInterval(intervalId);
+
       logMonitoringDetail("상세 polling 중지", {
         sessionId: targetSessionId,
       });
@@ -461,6 +543,8 @@ export default function AdminMonitoringDetailScreen() {
   };
 
   const handleUpdateMessage = async () => {
+    Keyboard.dismiss();
+
     if (!selectedMessageKey) {
       Alert.alert("안내", "수정할 자막을 먼저 선택하세요.");
       return;
@@ -472,7 +556,10 @@ export default function AdminMonitoringDetailScreen() {
     }
 
     if (isSubmitting) {
-      logMonitoringDetail("수정 요청 무시 - 이미 처리 중");
+      logMonitoringDetail(
+        "수정 요청 무시 - 이미 처리 중"
+      );
+
       return;
     }
 
@@ -482,27 +569,40 @@ export default function AdminMonitoringDetailScreen() {
       const token = await AsyncStorage.getItem("adminToken");
 
       if (!token) {
-        logMonitoringDetail("수정 중단 - adminToken 없음");
+        logMonitoringDetail(
+          "수정 중단 - adminToken 없음"
+        );
 
         Alert.alert("오류", "관리자 로그인이 필요합니다.");
         navigation.navigate("AdminLogin");
+
         return;
       }
 
       const selectedMessage = getSelectedMessage();
 
       if (!selectedMessage) {
-        logMonitoringDetail("수정 중단 - 선택 메시지 찾기 실패", {
-          selectedMessageKey,
-        });
+        logMonitoringDetail(
+          "수정 중단 - 선택 메시지 찾기 실패",
+          {
+            selectedMessageKey,
+          }
+        );
 
-        Alert.alert("오류", "선택한 자막 정보를 찾을 수 없습니다.");
+        Alert.alert(
+          "오류",
+          "선택한 자막 정보를 찾을 수 없습니다."
+        );
+
         return;
       }
 
       const messageId = selectedMessage.messageId;
+
       const transcriptId =
-        selectedMessage.transcriptId || selectedMessage.id || selectedMessageKey;
+        selectedMessage.transcriptId ||
+        selectedMessage.id ||
+        selectedMessageKey;
 
       const endpoint = messageId
         ? `${BASE_URL}/api/admin/conversation-messages/${messageId}`
@@ -518,17 +618,23 @@ export default function AdminMonitoringDetailScreen() {
 
       logMonitoringDetail("메시지 수정 요청", {
         sessionId: targetSessionId,
-        type: messageId ? "conversation-message" : "transcript",
+        type: messageId
+          ? "conversation-message"
+          : "transcript",
         messageId: messageId || null,
         transcriptId: transcriptId || null,
         body,
       });
 
-      const response = await axios.patch(endpoint, body, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const response = await axios.patch(
+        endpoint,
+        body,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
 
       logMonitoringDetail("메시지 수정 응답", {
         status: response.status,
@@ -538,12 +644,18 @@ export default function AdminMonitoringDetailScreen() {
       if (response.data?.success === false) {
         Alert.alert(
           "실패",
-          response.data?.message || "수정 처리에 실패했습니다."
+          response.data?.message ||
+            "수정 처리에 실패했습니다."
         );
+
         return;
       }
 
-      Alert.alert("완료", "수정 내용이 반영되었습니다.");
+      Alert.alert(
+        "완료",
+        "수정 내용이 반영되었습니다."
+      );
+
       await fetchLiveChatLogs(true);
     } catch (error) {
       const serverError =
@@ -556,7 +668,10 @@ export default function AdminMonitoringDetailScreen() {
         error: serverError,
       });
 
-      Alert.alert("오류", "수정에 실패했습니다. 서버 응답을 확인해 주세요.");
+      Alert.alert(
+        "오류",
+        "수정에 실패했습니다. 서버 응답을 확인해 주세요."
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -564,14 +679,22 @@ export default function AdminMonitoringDetailScreen() {
 
   const handleGoEditInfo = () => {
     if (!selectedMessageKey) {
-      Alert.alert("안내", "정보를 볼 자막을 먼저 선택하세요.");
+      Alert.alert(
+        "안내",
+        "정보를 볼 자막을 먼저 선택하세요."
+      );
+
       return;
     }
 
     const selectedMessage = getSelectedMessage();
 
     if (!selectedMessage) {
-      Alert.alert("오류", "선택한 자막 정보를 찾을 수 없습니다.");
+      Alert.alert(
+        "오류",
+        "선택한 자막 정보를 찾을 수 없습니다."
+      );
+
       return;
     }
 
@@ -608,23 +731,43 @@ export default function AdminMonitoringDetailScreen() {
       const stringValue = String(isoString).trim();
 
       const hasExplicitTimezone =
-        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
+        stringValue.endsWith("Z") ||
+        /[+-]\d{2}:\d{2}$/.test(stringValue);
 
       if (hasExplicitTimezone) {
         const date = new Date(stringValue);
-        return Number.isNaN(date.getTime()) ? null : date;
+
+        return Number.isNaN(date.getTime())
+          ? null
+          : date;
       }
 
       const normalized = stringValue.replace("T", " ");
-      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
-      const [year, month, day] = datePart.split("-").map(Number);
-      const [hour = 0, minute = 0, second = 0] = timePart
-        .split(":")
-        .map((value) => Number(String(value).split(".")[0]));
+
+      const [datePart, timePart = "00:00:00"] =
+        normalized.split(" ");
+
+      const [year, month, day] = datePart
+        .split("-")
+        .map(Number);
+
+      const [hour = 0, minute = 0, second = 0] =
+        timePart
+          .split(":")
+          .map((value) =>
+            Number(String(value).split(".")[0])
+          );
 
       if (!year || !month || !day) return null;
 
-      return new Date(year, month - 1, day, hour, minute, second);
+      return new Date(
+        year,
+        month - 1,
+        day,
+        hour,
+        minute,
+        second
+      );
     } catch {
       return null;
     }
@@ -645,7 +788,11 @@ export default function AdminMonitoringDetailScreen() {
 
   const isVisitorMessage = (msg) => {
     const sender = String(
-      msg.senderType || msg.sender || msg.role || msg.type || ""
+      msg.senderType ||
+        msg.sender ||
+        msg.role ||
+        msg.type ||
+        ""
     ).toUpperCase();
 
     if (
@@ -667,119 +814,231 @@ export default function AdminMonitoringDetailScreen() {
     <Container>
       <Header>
         <TouchableOpacity
+          activeOpacity={0.7}
           onPress={() => {
+            Keyboard.dismiss();
+
             logMonitoringDetail("뒤로가기 클릭");
             navigation.goBack();
           }}
         >
-          <BackIcon source={backIcon} resizeMode="contain" />
+          <BackIcon
+            source={backIcon}
+            resizeMode="contain"
+          />
         </TouchableOpacity>
 
-        <HeaderTitle numberOfLines={1}>{getDisplayTitle()}</HeaderTitle>
+        <HeaderTitle numberOfLines={1}>
+          {getDisplayTitle()}
+        </HeaderTitle>
 
         <View style={{ width: 24 }} />
       </Header>
 
-      {isLoading ? (
-        <LoadingWrapper>
-          <ActivityIndicator size="large" color="#1EC949" />
-        </LoadingWrapper>
-      ) : (
-        <ContentWrapper>
-          <ChatContainer>
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ padding: 20 }}
-            >
-              {chatMessages.length > 0 ? (
-                chatMessages.map((msg, idx) => {
-                  const currentKey = toKey(getMessageId(msg, idx));
-                  const isSelected = selectedMessageKey === currentKey;
-                  const isVisitor = isVisitorMessage(msg);
-                  const msgTime = formatMessageTime(
-                    msg.createdAt || msg.timestamp || msg.time
-                  );
-                  const text = String(getMessageText(msg)).trim();
-
-                  if (!text) return null;
-                  if (text === "실시간 자막 변환 중...") return null;
-                  if (text === "실시간 자막 변환 중") return null;
-                  if (text === "실시간 자막 확인 중...") return null;
-                  if (text === "실시간 자막 확인 중") return null;
-
-                  return (
-                    <TouchableOpacity
-                      key={currentKey}
-                      activeOpacity={0.85}
-                      onPress={() => handleSelectMessage(msg, idx)}
-                    >
-                      <BubbleWrapper isVisitor={isVisitor}>
-                        {!isVisitor && <TimeTextRight>{msgTime}</TimeTextRight>}
-
-                        <BubbleBox
-                          isVisitor={isVisitor}
-                          isSelected={isSelected}
-                        >
-                          <BubbleText isVisitor={isVisitor}>{text}</BubbleText>
-                        </BubbleBox>
-
-                        {isVisitor && <TimeTextLeft>{msgTime}</TimeTextLeft>}
-                      </BubbleWrapper>
-                    </TouchableOpacity>
-                  );
-                })
-              ) : (
-                <EmptyWrapper>
-                  <EmptyText>아직 수신된 자막이 없습니다.</EmptyText>
-                </EmptyWrapper>
-              )}
-
-              {ended && (
-                <RefreshingText isEnded={ended}>
-                  종료된 통화입니다.
-                </RefreshingText>
-              )}
-            </ScrollView>
-          </ChatContainer>
-        </ContentWrapper>
-      )}
-
-      <QuickEditCard>
-        <EditHeader>
-          <EditTitle>바로 수정</EditTitle>
-
-          <TouchableOpacity onPress={handleGoEditInfo}>
-            <DetailLinkText>정보</DetailLinkText>
-          </TouchableOpacity>
-        </EditHeader>
-
-        <Divider />
-
-        <EditInputRow>
-          <EditInput
-            value={currentStt}
-            onChangeText={setCurrentStt}
-            placeholder={
-              ended ? "종료된 통화입니다" : "수정할 자막을 선택하세요"
-            }
-            placeholderTextColor="#BBB"
-          />
-
-          <TouchableOpacity
-            onPress={handleUpdateMessage}
-            disabled={isSubmitting || !selectedMessageKey}
-          >
-            <EditIcon
-              source={pencilIcon}
-              resizeMode="contain"
-              style={{
-                tintColor:
-                  selectedMessageKey && !isSubmitting ? "#444" : "#BBB",
-              }}
+      <KeyboardAvoidingContent
+        enabled
+        behavior={
+          Platform.OS === "ios" ? "padding" : "height"
+        }
+        keyboardVerticalOffset={0}
+      >
+        {isLoading ? (
+          <LoadingWrapper>
+            <ActivityIndicator
+              size="large"
+              color="#1EC949"
             />
-          </TouchableOpacity>
-        </EditInputRow>
-      </QuickEditCard>
+          </LoadingWrapper>
+        ) : (
+          <ContentWrapper>
+            <ChatContainer>
+              <ScrollView
+                ref={chatScrollRef}
+                style={{ flex: 1 }}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={
+                  Platform.OS === "ios"
+                    ? "interactive"
+                    : "on-drag"
+                }
+                contentContainerStyle={{
+                  flexGrow: 1,
+                  padding: 20,
+                }}
+              >
+                {chatMessages.length > 0 ? (
+                  chatMessages.map((msg, idx) => {
+                    const currentKey = toKey(
+                      getMessageId(msg, idx)
+                    );
+
+                    const isSelected =
+                      selectedMessageKey === currentKey;
+
+                    const isVisitor =
+                      isVisitorMessage(msg);
+
+                    const msgTime = formatMessageTime(
+                      msg.createdAt ||
+                        msg.timestamp ||
+                        msg.time
+                    );
+
+                    const text = String(
+                      getMessageText(msg)
+                    ).trim();
+
+                    if (!text) return null;
+
+                    if (
+                      text === "실시간 자막 변환 중..."
+                    ) {
+                      return null;
+                    }
+
+                    if (
+                      text === "실시간 자막 변환 중"
+                    ) {
+                      return null;
+                    }
+
+                    if (
+                      text === "실시간 자막 확인 중..."
+                    ) {
+                      return null;
+                    }
+
+                    if (
+                      text === "실시간 자막 확인 중"
+                    ) {
+                      return null;
+                    }
+
+                    return (
+                      <TouchableOpacity
+                        key={currentKey}
+                        activeOpacity={0.85}
+                        onPress={() =>
+                          handleSelectMessage(msg, idx)
+                        }
+                      >
+                        <BubbleWrapper
+                          isVisitor={isVisitor}
+                        >
+                          {!isVisitor && (
+                            <TimeTextRight>
+                              {msgTime}
+                            </TimeTextRight>
+                          )}
+
+                          <BubbleBox
+                            isVisitor={isVisitor}
+                            isSelected={isSelected}
+                          >
+                            <BubbleText
+                              isVisitor={isVisitor}
+                            >
+                              {text}
+                            </BubbleText>
+                          </BubbleBox>
+
+                          {isVisitor && (
+                            <TimeTextLeft>
+                              {msgTime}
+                            </TimeTextLeft>
+                          )}
+                        </BubbleWrapper>
+                      </TouchableOpacity>
+                    );
+                  })
+                ) : (
+                  <EmptyWrapper>
+                    <EmptyText>
+                      아직 수신된 자막이 없습니다.
+                    </EmptyText>
+                  </EmptyWrapper>
+                )}
+
+                {ended && (
+                  <RefreshingText isEnded={ended}>
+                    종료된 통화입니다.
+                  </RefreshingText>
+                )}
+              </ScrollView>
+            </ChatContainer>
+          </ContentWrapper>
+        )}
+
+        <QuickEditCard>
+          <EditHeader>
+            <EditTitle>바로 수정</EditTitle>
+
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={handleGoEditInfo}
+            >
+              <DetailLinkText>정보</DetailLinkText>
+            </TouchableOpacity>
+          </EditHeader>
+
+          <Divider />
+
+          <EditInputRow>
+            <EditInput
+              value={currentStt}
+              onChangeText={setCurrentStt}
+              placeholder={
+                ended
+                  ? "종료된 통화입니다"
+                  : "수정할 자막을 선택하세요"
+              }
+              placeholderTextColor="#BBB"
+              editable={!isSubmitting}
+              returnKeyType="done"
+              blurOnSubmit
+              onFocus={() => {
+                setTimeout(() => {
+                  scrollChatToBottom(true);
+                }, 100);
+              }}
+              onSubmitEditing={handleUpdateMessage}
+            />
+
+            <TouchableOpacity
+              activeOpacity={0.7}
+              hitSlop={{
+                top: 10,
+                bottom: 10,
+                left: 10,
+                right: 10,
+              }}
+              onPress={handleUpdateMessage}
+              disabled={
+                isSubmitting || !selectedMessageKey
+              }
+            >
+              {isSubmitting ? (
+                <ActivityIndicator
+                  size="small"
+                  color="#1EC949"
+                  style={{ marginLeft: 10 }}
+                />
+              ) : (
+                <EditIcon
+                  source={pencilIcon}
+                  resizeMode="contain"
+                  style={{
+                    tintColor: selectedMessageKey
+                      ? "#444"
+                      : "#BBB",
+                  }}
+                />
+              )}
+            </TouchableOpacity>
+          </EditInputRow>
+        </QuickEditCard>
+      </KeyboardAvoidingContent>
     </Container>
   );
 }
@@ -795,6 +1054,12 @@ const Header = styled.View`
   align-items: center;
   padding: 15px 20px;
   background-color: #F4F5F7;
+`;
+
+const KeyboardAvoidingContent = styled(
+  KeyboardAvoidingView
+)`
+  flex: 1;
 `;
 
 const BackIcon = styled.Image`
@@ -816,6 +1081,7 @@ const ContentWrapper = styled.View`
   flex: 1;
   padding: 0 15px;
   margin-top: 10px;
+  min-height: 0px;
 `;
 
 const ChatContainer = styled.View`
@@ -823,32 +1089,50 @@ const ChatContainer = styled.View`
   background-color: #F1F2F4;
   border-radius: 20px;
   overflow: hidden;
+  min-height: 0px;
 `;
 
 const BubbleWrapper = styled.View`
   flex-direction: row;
-  justify-content: ${(props) => (props.isVisitor ? "flex-start" : "flex-end")};
+  justify-content: ${(props) =>
+    props.isVisitor ? "flex-start" : "flex-end"};
   align-items: flex-end;
   margin-bottom: 15px;
 `;
 
 const BubbleBox = styled.View`
-  background-color: ${(props) => (props.isVisitor ? "#fff" : "#1EC949")};
+  background-color: ${(props) =>
+    props.isVisitor ? "#fff" : "#1EC949"};
+
   border-color: ${(props) =>
-    props.isSelected ? "#1EC949" : props.isVisitor ? "#EAEAEA" : "transparent"};
+    props.isSelected
+      ? "#1EC949"
+      : props.isVisitor
+      ? "#EAEAEA"
+      : "transparent"};
+
   border-width: ${(props) =>
-    props.isSelected ? "2px" : props.isVisitor ? "1px" : "0px"};
+    props.isSelected
+      ? "2px"
+      : props.isVisitor
+      ? "1px"
+      : "0px"};
+
   border-radius: 20px;
   padding: 12px 18px;
   max-width: 75%;
-  elevation: ${(props) => (props.isVisitor ? "1" : "0")};
+
+  elevation: ${(props) =>
+    props.isVisitor ? "1" : "0"};
+
   shadow-color: #000;
   shadow-opacity: 0.05;
   shadow-radius: 3px;
 `;
 
 const BubbleText = styled.Text`
-  color: ${(props) => (props.isVisitor ? "#333" : "#fff")};
+  color: ${(props) =>
+    props.isVisitor ? "#333" : "#fff"};
   font-size: 15px;
   font-weight: 500;
 `;
@@ -868,6 +1152,7 @@ const TimeTextRight = styled.Text`
 `;
 
 const EmptyWrapper = styled.View`
+  flex: 1;
   padding: 80px 20px;
   align-items: center;
   justify-content: center;
@@ -881,8 +1166,10 @@ const EmptyText = styled.Text`
 
 const RefreshingText = styled.Text`
   align-self: flex-start;
-  background-color: ${(props) => (props.isEnded ? "#E5E7EB" : "#fff")};
-  color: ${(props) => (props.isEnded ? "#666" : "#aaa")};
+  background-color: ${(props) =>
+    props.isEnded ? "#E5E7EB" : "#fff"};
+  color: ${(props) =>
+    props.isEnded ? "#666" : "#aaa"};
   font-size: 13px;
   font-weight: 500;
   padding: 10px 16px;
@@ -891,6 +1178,7 @@ const RefreshingText = styled.Text`
 `;
 
 const QuickEditCard = styled.View`
+  flex-shrink: 0;
   background-color: #fff;
   margin: 15px;
   padding: 16px 20px;
@@ -930,11 +1218,15 @@ const EditInputRow = styled.View`
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
+  min-height: 24px;
 `;
 
 const EditInput = styled.TextInput`
   flex: 1;
+  min-height: 24px;
+  max-height: 100px;
   font-size: 15px;
+  line-height: 21px;
   color: #333;
   padding: 0;
   font-weight: 500;
