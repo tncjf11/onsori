@@ -14,6 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import BASE_URL from "../../api/config";
 import MonitoringItem from "../../components/MonitoringItem";
+import { subscribeTopic } from "../../services/realtimeSocket";
 
 const bellIcon = require("../../assets/bell.png");
 
@@ -55,9 +56,10 @@ export default function AdminMonitoringScreen() {
 
   const [monitoringList, setMonitoringList] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeCount, setActiveCount] = useState(0);
+  const activeCount = monitoringList.length;
 
   const isMountedRef = useRef(true);
+  const adminMonitoringUnsubscribeRef = useRef(null);
 
   const parseServerDate = (isoString) => {
     if (!isoString) return null;
@@ -308,7 +310,6 @@ export default function AdminMonitoringScreen() {
 
         if (isMountedRef.current) {
           setMonitoringList([]);
-          setActiveCount(0);
         }
 
         navigation.navigate("AdminLogin");
@@ -347,7 +348,6 @@ export default function AdminMonitoringScreen() {
 
       if (isMountedRef.current) {
         setMonitoringList(mappedList);
-        setActiveCount(mappedList.length);
       }
     } catch (error) {
       const serverError =
@@ -359,7 +359,6 @@ export default function AdminMonitoringScreen() {
 
       if (isMountedRef.current) {
         setMonitoringList([]);
-        setActiveCount(0);
       }
     } finally {
       if (!isSilent && isMountedRef.current) {
@@ -368,11 +367,150 @@ export default function AdminMonitoringScreen() {
     }
   };
 
+  // =========================================================
+  // 관리자 모니터링 WebSocket
+  // =========================================================
+
+  const stopAdminMonitoringSubscription = () => {
+    if (!adminMonitoringUnsubscribeRef.current) {
+      return;
+    }
+
+    try {
+      adminMonitoringUnsubscribeRef.current();
+    } catch (error) {
+      logAdminMonitoring(
+        "관리자 모니터링 구독 해제 실패",
+        error?.message
+      );
+    }
+
+    adminMonitoringUnsubscribeRef.current = null;
+
+    logAdminMonitoring(
+      "관리자 모니터링 WebSocket 구독 중지"
+    );
+  };
+
+  const removeSessionFromMonitoringList = (sessionId) => {
+    if (
+      sessionId === null ||
+      sessionId === undefined
+    ) {
+      return;
+    }
+
+    setMonitoringList((prev) => {
+      const next = prev.filter(
+        (item) =>
+          String(item.sessionId) !==
+          String(sessionId)
+      );
+
+      return next;
+    });
+  };
+
+  const handleAdminMonitoringMessage = (payload) => {
+    if (
+      !payload ||
+      typeof payload !== "object"
+    ) {
+      logAdminMonitoring(
+        "관리자 모니터링 이벤트 형식 확인 필요",
+        payload
+      );
+
+      return;
+    }
+
+    const sessionId =
+      payload.sessionId ??
+      payload.id ??
+      null;
+
+    const status = normalizeStatus(
+      payload.status
+    );
+
+    logAdminMonitoring(
+      "관리자 모니터링 WebSocket 수신",
+      {
+        sessionId,
+        status,
+        message:
+          payload.message || null,
+      }
+    );
+
+    if (!sessionId) {
+      return;
+    }
+
+    /**
+     * 현재 백엔드 SessionService.close()는
+     * /topic/admin/monitoring 으로
+     *
+     * {
+     *   sessionId,
+     *   status: "ENDED",
+     *   message: "관리자 모니터링에서 제거할 세션입니다."
+     * }
+     *
+     * 형태의 종료 이벤트를 전송한다.
+     *
+     * 종료 이벤트를 받으면 REST polling을
+     * 기다리지 않고 목록에서 즉시 제거한다.
+     */
+    if (
+      CLOSED_SESSION_STATUSES.has(status)
+    ) {
+      removeSessionFromMonitoringList(
+        sessionId
+      );
+
+      return;
+    }
+
+    /**
+     * 추후 백엔드에서 OPEN / TALKING 등의
+     * 관리자 monitoring 이벤트도 보내게 되면
+     * 그때는 최신 목록을 한 번 재조회한다.
+     *
+     * 현재 백엔드에서는 종료 이벤트만 온다.
+     */
+    if (
+      ACTIVE_SESSION_STATUSES.has(status)
+    ) {
+      fetchActiveSessions(true);
+    }
+  };
+
+  const startAdminMonitoringSubscription = () => {
+    stopAdminMonitoringSubscription();
+
+    logAdminMonitoring(
+      "관리자 모니터링 WebSocket 구독 시작",
+      {
+        destination:
+          "/topic/admin/monitoring",
+      }
+    );
+
+    adminMonitoringUnsubscribeRef.current =
+      subscribeTopic(
+        "/topic/admin/monitoring",
+        handleAdminMonitoringMessage
+      );
+  };
+
   useEffect(() => {
     isMountedRef.current = true;
 
     return () => {
       isMountedRef.current = false;
+
+      stopAdminMonitoringSubscription();
     };
   }, []);
 
@@ -380,10 +518,28 @@ export default function AdminMonitoringScreen() {
     let pollingTimer = null;
 
     if (isFocused) {
-      logAdminMonitoring("화면 포커스 - polling 시작");
+      logAdminMonitoring(
+        "화면 포커스 - 초기 조회 + WebSocket 구독 + 신규 세션 polling 시작"
+      );
 
+      /**
+       * 1. 화면 진입 시 현재 진행 중 세션을 REST로 즉시 조회
+       */
       fetchActiveSessions(false);
 
+      /**
+       * 2. 종료된 세션은 /topic/admin/monitoring 으로
+       *    즉시 제거
+       */
+      startAdminMonitoringSubscription();
+
+      /**
+       * 3. 현재 백엔드는 새 세션 시작 시
+       *    /topic/admin/monitoring 으로 이벤트를 보내지 않는다.
+       *
+       * 따라서 새 통화를 발견하려면 REST polling을
+       * 아직 유지해야 한다.
+       */
       pollingTimer = setInterval(() => {
         fetchActiveSessions(true);
       }, 3000);
@@ -392,8 +548,13 @@ export default function AdminMonitoringScreen() {
     return () => {
       if (pollingTimer) {
         clearInterval(pollingTimer);
-        logAdminMonitoring("화면 이탈 - polling 중지");
+
+        logAdminMonitoring(
+          "화면 이탈 - 신규 세션 polling 중지"
+        );
       }
+
+      stopAdminMonitoringSubscription();
     };
   }, [isFocused]);
 

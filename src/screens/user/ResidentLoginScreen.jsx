@@ -27,7 +27,7 @@ const yellowBarImage = require("../../assets/yellowbar.png");
 /**
  * 카카오 REST API KEY
  *
- * Client Secret은 절대 프론트에 넣지 않음.
+ * Client Secret은 프론트에 넣지 않음.
  */
 const REST_API_KEY = "6995a27f1c3c0a59b90e27ae3b9cdbe1";
 
@@ -119,10 +119,6 @@ export default function ResidentLoginScreen({
 
   // =========================================================
   // 기본 알림 설정
-  //
-  // ★ 기존 값을 절대 덮어쓰지 않는다.
-  //
-  // 처음 앱을 쓰는 경우에만 false 생성.
   // =========================================================
 
   const ensureDefaultSettings = async () => {
@@ -167,9 +163,7 @@ export default function ResidentLoginScreen({
 
         logResidentLogin(
           "최초 알림 기본값 생성",
-          valuesToSet.map(
-            ([key]) => key
-          )
+          valuesToSet.map(([key]) => key)
         );
       }
     } catch (error) {
@@ -242,11 +236,10 @@ export default function ResidentLoginScreen({
 
       return {
         isPaired,
+
         deviceUid:
           deviceUid
-            ? String(
-                deviceUid
-              ).trim()
+            ? String(deviceUid).trim()
             : null,
       };
     } catch (error) {
@@ -272,7 +265,7 @@ export default function ResidentLoginScreen({
   // → QrVerify
   //
   // accessToken 없음
-  // → 로그인 화면 유지
+  // → 이전 로그인 사용자 정보 정리 후 로그인 화면
   // =========================================================
 
   useEffect(() => {
@@ -298,19 +291,37 @@ export default function ResidentLoginScreen({
           "기존 로그인 확인",
           {
             hasAccessToken:
-              Boolean(
-                accessToken
-              ),
+              Boolean(accessToken),
 
             userId:
               currentUserId,
           }
         );
 
-        if (
-          isCancelled ||
-          !accessToken
-        ) {
+        if (isCancelled) {
+          return;
+        }
+
+        // ===================================================
+        // 토큰이 없는 경우
+        //
+        // 예전 userId / userName이 남아 있으면 정리
+        //
+        // pairedUserId / deviceUid는 유지
+        // → 같은 사용자가 다시 로그인하면
+        //   기존 QR Pairing을 재사용할 수 있음
+        // ===================================================
+
+        if (!accessToken) {
+          await AsyncStorage.multiRemove([
+            "userId",
+            "userName",
+          ]);
+
+          logResidentLogin(
+            "accessToken 없음 - 이전 로그인 사용자 정보 정리"
+          );
+
           return;
         }
 
@@ -320,12 +331,13 @@ export default function ResidentLoginScreen({
          */
         if (!currentUserId) {
           logResidentLogin(
-            "accessToken은 있으나 userId 없음 - 토큰 제거"
+            "accessToken은 있으나 userId 없음 - 로그인 정보 정리"
           );
 
-          await AsyncStorage.removeItem(
-            "accessToken"
-          );
+          await AsyncStorage.multiRemove([
+            "accessToken",
+            "userName",
+          ]);
 
           return;
         }
@@ -381,9 +393,7 @@ export default function ResidentLoginScreen({
               accessToken,
 
             userId:
-              String(
-                currentUserId
-              ),
+              String(currentUserId),
           }
         );
       } catch (error) {
@@ -520,8 +530,6 @@ export default function ResidentLoginScreen({
   }) => {
     // =====================================================
     // 사용자 / Token 저장
-    //
-    // ★ 이제 accessToken도 로그인 직후 저장
     // =====================================================
 
     await AsyncStorage.multiSet([
@@ -547,10 +555,6 @@ export default function ResidentLoginScreen({
       ],
     ]);
 
-    /**
-     * 설정은 기존값 유지.
-     * 최초 실행일 때만 false 생성.
-     */
     await ensureDefaultSettings();
 
     // =====================================================
@@ -577,8 +581,6 @@ export default function ResidentLoginScreen({
 
     // =====================================================
     // 같은 사용자 + 이미 QR 인증
-    //
-    // QR을 다시 찍지 않는다.
     // =====================================================
 
     if (pairing.isPaired) {
@@ -602,9 +604,7 @@ export default function ResidentLoginScreen({
     }
 
     // =====================================================
-    // 다른 사용자 / 최초 사용자 / Pairing 없음
-    //
-    // QR 인증
+    // 최초 사용자 / 다른 사용자 / Pairing 없음
     // =====================================================
 
     Alert.alert(
@@ -622,9 +622,7 @@ export default function ResidentLoginScreen({
                   backendJwtToken,
 
                 userId:
-                  String(
-                    userId
-                  ),
+                  String(userId),
               }
             );
           },
@@ -800,9 +798,7 @@ export default function ResidentLoginScreen({
           rawUserId !==
             undefined &&
           rawUserId !== null
-            ? String(
-                rawUserId
-              )
+            ? String(rawUserId)
             : null;
 
         if (!backendJwtToken) {
@@ -874,7 +870,6 @@ export default function ResidentLoginScreen({
 
         // ===================================================
         // KOE006
-        // Redirect URI mismatch
         // ===================================================
 
         if (
@@ -896,7 +891,7 @@ export default function ResidentLoginScreen({
         }
 
         // ===================================================
-        // Client credentials
+        // KOE010
         // ===================================================
 
         if (

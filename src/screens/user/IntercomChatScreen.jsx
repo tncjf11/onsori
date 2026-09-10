@@ -18,6 +18,7 @@ import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import BASE_URL from "../../api/config";
+import { subscribeSessionTopics } from "../../services/realtimeSocket";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -69,10 +70,17 @@ export default function IntercomChatScreen() {
   const route = useRoute();
 
   const scrollViewRef = useRef(null);
-  const pollingRef = useRef(null);
 
-  // polling API 중복 실행 방지
-  const pollingBusyRef = useRef(false);
+  // 현재 화면에서 사용 중인 STOMP 구독 해제 함수
+  const realtimeUnsubscribeRef = useRef(null);
+
+  // REST 메시지 조회 중복 실행 방지
+  const messageFetchBusyRef = useRef(false);
+
+  // 백엔드는 realtime-transcripts에서 partial만 보내므로
+  // 현재 화면에 표시 중인 누적 partial을 ref에도 보관한다.
+  const realtimePartialRef = useRef("");
+  const realtimeUtteranceSeqRef = useRef(0);
 
   const lastVisitorMessageKeyRef = useRef(null);
   const lastMessageSignatureRef = useRef(null);
@@ -80,7 +88,8 @@ export default function IntercomChatScreen() {
   const isEndingRef = useRef(false);
   const isMountedRef = useRef(true);
 
-  // 동일한 권한 오류 Alert 중복 방지
+  // 동일한 종료/권한 오류 Alert 중복 방지
+  const remoteEndHandledRef = useRef(false);
   const pairingErrorHandledRef = useRef(false);
   const authErrorHandledRef = useRef(false);
 
@@ -118,6 +127,10 @@ export default function IntercomChatScreen() {
     useState(initialSessionId);
 
   const [messages, setMessages] = useState([]);
+
+  // Python partial STT -> Spring -> realtime-transcripts
+  // 현재 발화 하나를 실시간으로 보여주는 임시 말풍선
+  const [realtimePartial, setRealtimePartial] = useState("");
 
   const [seconds, setSeconds] = useState(0);
 
@@ -503,24 +516,28 @@ export default function IntercomChatScreen() {
   };
 
   // =========================================================
-  // Polling 중지
+  // 실시간 STOMP 구독 중지
   // =========================================================
 
-  const stopMessagePolling = () => {
-    if (pollingRef.current) {
-      clearInterval(
-        pollingRef.current
-      );
+  const stopRealtimeSubscription = () => {
+    if (realtimeUnsubscribeRef.current) {
+      try {
+        realtimeUnsubscribeRef.current();
+      } catch (error) {
+        logUserChat(
+          "실시간 구독 해제 실패",
+          error?.message
+        );
+      }
 
-      pollingRef.current = null;
+      realtimeUnsubscribeRef.current = null;
 
       logUserChat(
-        "메시지 polling 중지"
+        "실시간 STOMP 구독 중지"
       );
     }
 
-    pollingBusyRef.current =
-      false;
+    messageFetchBusyRef.current = false;
   };
 
   // =========================================================
@@ -535,7 +552,7 @@ export default function IntercomChatScreen() {
       "callStartTime"
     );
 
-    stopMessagePolling();
+    stopRealtimeSubscription();
 
     if (isMountedRef.current) {
       setCurrentSessionId(
@@ -610,7 +627,7 @@ export default function IntercomChatScreen() {
     authErrorHandledRef.current =
       true;
 
-    stopMessagePolling();
+    stopRealtimeSubscription();
 
     await AsyncStorage.removeItem(
       "accessToken"
@@ -658,7 +675,7 @@ export default function IntercomChatScreen() {
       pairingErrorHandledRef.current =
         true;
 
-      stopMessagePolling();
+      stopRealtimeSubscription();
 
       /**
        * 서버에서 현재 세션에 접근 권한이 없다고 판단했으므로
@@ -1138,9 +1155,30 @@ export default function IntercomChatScreen() {
             id:
               String(id),
 
+            messageId:
+              message.messageId ??
+              null,
+
+            transcriptId:
+              message.transcriptId ??
+              null,
+
             text,
 
             type,
+
+            senderType:
+              message.senderType ||
+              message.sender ||
+              null,
+
+            messageType:
+              message.messageType ||
+              null,
+
+            originalContent:
+              message.originalContent ||
+              null,
 
             time:
               formatBubbleTime(
@@ -1486,16 +1524,16 @@ export default function IntercomChatScreen() {
       }
 
       /**
-       * 이전 polling 요청이 아직 안 끝났다면
+       * 이전 메시지 조회 요청이 아직 안 끝났다면
        * 새 요청 중복 실행하지 않음.
        */
       if (
-        pollingBusyRef.current
+        messageFetchBusyRef.current
       ) {
         return;
       }
 
-      pollingBusyRef.current =
+      messageFetchBusyRef.current =
         true;
 
       try {
@@ -1631,7 +1669,7 @@ export default function IntercomChatScreen() {
           serverStatus === 401 ||
           serverStatus === 403
         ) {
-          stopMessagePolling();
+          stopRealtimeSubscription();
 
           await handleAuthExpired();
 
@@ -1648,7 +1686,7 @@ export default function IntercomChatScreen() {
         if (
           serverStatus === 400
         ) {
-          stopMessagePolling();
+          stopRealtimeSubscription();
 
           const isPermissionError =
             String(
@@ -1670,7 +1708,7 @@ export default function IntercomChatScreen() {
 
           /**
            * 다른 종류의 잘못된 요청이라도
-           * 1.5초마다 무한 반복하지 않음.
+           * 잘못된 요청을 반복하지 않음.
            */
           Alert.alert(
             "통화 정보 오류",
@@ -1706,7 +1744,7 @@ export default function IntercomChatScreen() {
           serverStatus === 409 ||
           serverStatus === 410
         ) {
-          stopMessagePolling();
+          stopRealtimeSubscription();
 
           if (
             !isEndingRef.current
@@ -1735,27 +1773,632 @@ export default function IntercomChatScreen() {
           }
         }
       } finally {
-        pollingBusyRef.current =
+        messageFetchBusyRef.current =
           false;
       }
     };
 
   // =========================================================
-  // 메시지 polling
+  // 실시간 메시지 / partial STT 처리
   // =========================================================
 
-  const startMessagePolling = (
-    targetSessionId,
-    activeToken
+  const vibrateForNewVisitorUtterance = async (
+    targetSessionId
   ) => {
-    stopMessagePolling();
+    try {
+      const subtitleVibSetting =
+        await AsyncStorage.getItem(
+          "subtitleVibrate"
+        );
+
+      if (
+        subtitleVibSetting ===
+        "true"
+      ) {
+        Vibration.vibrate(400);
+
+        logUserChat(
+          "실시간 방문자 자막 진동 실행",
+          {
+            sessionId:
+              targetSessionId,
+          }
+        );
+      }
+    } catch (error) {
+      logUserChat(
+        "자막 진동 설정 확인 실패",
+        error?.message
+      );
+    }
+  };
+
+  /**
+   * 백엔드 realtime-transcripts는 현재
+   * type=partial만 프론트로 전송한다.
+   *
+   * Python에서 final이 오면 Spring 내부 partial buffer는
+   * 초기화되지만 final 이벤트 자체는 프론트로 오지 않는다.
+   *
+   * 따라서 다음 partial이 이전 누적문장으로 시작하지 않으면
+   * "새 발화가 시작됐다"고 판단하고 이전 partial을
+   * 화면의 확정 수신 말풍선으로 남긴다.
+   */
+  const commitPreviousRealtimePartial = (
+    text
+  ) => {
+    const safeText =
+      String(
+        text || ""
+      ).trim();
+
+    if (!safeText) {
+      return;
+    }
+
+    const nextId =
+      `realtime-receive-${Date.now()}-${++realtimeUtteranceSeqRef.current}`;
+
+    setMessages(
+      (prev) => {
+        const alreadyExists =
+          prev.some(
+            (item) =>
+              item.type ===
+                "receive" &&
+              String(
+                item.text || ""
+              ).trim() ===
+                safeText
+          );
+
+        if (alreadyExists) {
+          return prev;
+        }
+
+        return [
+          ...prev,
+          {
+            id: nextId,
+            messageId: null,
+            transcriptId: null,
+            text: safeText,
+            type: "receive",
+            senderType: "VISITOR",
+            messageType: "REALTIME_STT",
+            originalContent: null,
+            time: getTimeString(),
+            createdAt:
+              new Date().toISOString(),
+            isRealtimeCommitted:
+              true,
+          },
+        ];
+      }
+    );
+  };
+
+  const clearRealtimePartial = () => {
+    realtimePartialRef.current =
+      "";
 
     if (
-      !targetSessionId ||
-      !activeToken
+      isMountedRef.current
+    ) {
+      setRealtimePartial("");
+    }
+  };
+
+  const handleRealtimeTranscriptMessage = (
+    targetSessionId,
+    payload
+  ) => {
+    if (
+      !payload ||
+      typeof payload !==
+        "object"
     ) {
       return;
     }
+
+    if (
+      payload.sessionId != null &&
+      String(
+        payload.sessionId
+      ) !==
+        String(
+          targetSessionId
+        )
+    ) {
+      return;
+    }
+
+    const realtimeType =
+      String(
+        payload.type || ""
+      )
+        .trim()
+        .toLowerCase();
+
+    if (
+      realtimeType !==
+      "partial"
+    ) {
+      return;
+    }
+
+    const nextText =
+      String(
+        payload.text || ""
+      ).trim();
+
+    if (!nextText) {
+      return;
+    }
+
+    const previousText =
+      String(
+        realtimePartialRef.current ||
+          ""
+      ).trim();
+
+    /**
+     * 같은 발화 중에는 Spring이 delta를 누적해서 보내므로
+     * nextText는 previousText로 시작해야 한다.
+     *
+     * 그렇지 않으면 Python final 이후
+     * 다음 발화의 첫 partial로 판단.
+     */
+    const isNewUtterance =
+      Boolean(previousText) &&
+      nextText !==
+        previousText &&
+      !nextText.startsWith(
+        previousText
+      );
+
+    if (
+      isNewUtterance
+    ) {
+      commitPreviousRealtimePartial(
+        previousText
+      );
+
+      vibrateForNewVisitorUtterance(
+        targetSessionId
+      );
+    } else if (
+      !previousText
+    ) {
+      vibrateForNewVisitorUtterance(
+        targetSessionId
+      );
+    }
+
+    realtimePartialRef.current =
+      nextText;
+
+    if (
+      isMountedRef.current
+    ) {
+      setRealtimePartial(
+        nextText
+      );
+    }
+
+    logUserChat(
+      "실시간 partial STT 수신",
+      {
+        sessionId:
+          targetSessionId,
+        text:
+          nextText,
+        newUtterance:
+          isNewUtterance,
+      }
+    );
+  };
+
+  /**
+   * /topic/sessions/{id}/messages
+   *
+   * ConversationMessageService는 messageId가 들어있는
+   * ConversationMessageResponse를 전송한다.
+   *
+   * SessionService.sendReply()는 같은 destination으로
+   * ReplyMessage(messageId 없음)도 한 번 더 전송하므로,
+   * 여기서는 messageId가 없는 이벤트를 무시해 중복 말풍선을 막는다.
+   */
+  const handleRealtimeConversationMessage = (
+    targetSessionId,
+    payload
+  ) => {
+    if (
+      !payload ||
+      typeof payload !==
+        "object"
+    ) {
+      return;
+    }
+
+    if (
+      payload.sessionId != null &&
+      String(
+        payload.sessionId
+      ) !==
+        String(
+          targetSessionId
+        )
+    ) {
+      return;
+    }
+
+    if (
+      payload.messageId == null
+    ) {
+      logUserChat(
+        "messageId 없는 중복/보조 메시지 이벤트 무시",
+        payload
+      );
+
+      return;
+    }
+
+    const normalized =
+      normalizeMessages([
+        payload,
+      ])[0];
+
+    if (!normalized) {
+      return;
+    }
+
+    /**
+     * 서버가 확정 VISITOR 메시지를 보내는 경로가 생기거나
+     * 기존 STT 경로에서 메시지가 들어온 경우,
+     * 동일 텍스트의 realtime 임시 말풍선은 제거한다.
+     */
+    if (
+      normalized.type ===
+        "receive"
+    ) {
+      const currentPartial =
+        String(
+          realtimePartialRef.current ||
+            ""
+        ).trim();
+
+      if (
+        currentPartial &&
+        currentPartial ===
+          normalized.text
+      ) {
+        clearRealtimePartial();
+      }
+    }
+
+    setMessages(
+      (prev) => {
+        let next = [
+          ...prev,
+        ];
+
+        /**
+         * 서버 messageId 기준 기존 메시지 갱신
+         */
+        const sameMessageIndex =
+          next.findIndex(
+            (item) =>
+              item.messageId != null &&
+              String(
+                item.messageId
+              ) ===
+                String(
+                  normalized.messageId
+                )
+          );
+
+        if (
+          sameMessageIndex >=
+          0
+        ) {
+          next[
+            sameMessageIndex
+          ] = {
+            ...next[
+              sameMessageIndex
+            ],
+            ...normalized,
+          };
+
+          return next;
+        }
+
+        /**
+         * POST /reply 성공 직후 만든 local-send 말풍선이 있다면
+         * 서버의 정식 messageId 메시지로 교체.
+         */
+        if (
+          normalized.type ===
+          "send"
+        ) {
+          const localIndex =
+            next.findIndex(
+              (item) =>
+                String(
+                  item.id || ""
+                ).startsWith(
+                  "local-send-"
+                ) &&
+                item.type ===
+                  "send" &&
+                String(
+                  item.text || ""
+                ).trim() ===
+                  normalized.text
+            );
+
+          if (
+            localIndex >= 0
+          ) {
+            next[
+              localIndex
+            ] = normalized;
+
+            return next;
+          }
+        }
+
+        /**
+         * realtime partial에서 로컬 확정해둔 방문자 말풍선과
+         * 서버 확정 메시지가 동일하면 서버 메시지로 교체.
+         */
+        if (
+          normalized.type ===
+          "receive"
+        ) {
+          const realtimeIndex =
+            next.findIndex(
+              (item) =>
+                item.isRealtimeCommitted ===
+                  true &&
+                item.type ===
+                  "receive" &&
+                String(
+                  item.text || ""
+                ).trim() ===
+                  normalized.text
+            );
+
+          if (
+            realtimeIndex >=
+            0
+          ) {
+            next[
+              realtimeIndex
+            ] = normalized;
+
+            return next;
+          }
+        }
+
+        next.push(
+          normalized
+        );
+
+        return next;
+      }
+    );
+
+    if (
+      normalized.type ===
+      "receive"
+    ) {
+      const visitorKey =
+        `${normalized.createdAt}-${normalized.text}`;
+
+      if (
+        lastVisitorMessageKeyRef.current !==
+        visitorKey
+      ) {
+        lastVisitorMessageKeyRef.current =
+          visitorKey;
+      }
+    }
+
+    logUserChat(
+      "실시간 대화 메시지 수신",
+      {
+        sessionId:
+          targetSessionId,
+        messageId:
+          normalized.messageId,
+        type:
+          normalized.type,
+        text:
+          normalized.text,
+      }
+    );
+  };
+
+  const handleRealtimeMessageUpdate = (
+    targetSessionId,
+    payload
+  ) => {
+    if (
+      !payload ||
+      typeof payload !==
+        "object" ||
+      payload.messageId == null
+    ) {
+      return;
+    }
+
+    if (
+      payload.sessionId != null &&
+      String(
+        payload.sessionId
+      ) !==
+        String(
+          targetSessionId
+        )
+    ) {
+      return;
+    }
+
+    const normalized =
+      normalizeMessages([
+        payload,
+      ])[0];
+
+    if (!normalized) {
+      return;
+    }
+
+    setMessages(
+      (prev) =>
+        prev.map(
+          (item) =>
+            item.messageId !=
+              null &&
+            String(
+              item.messageId
+            ) ===
+              String(
+                normalized.messageId
+              )
+              ? {
+                  ...item,
+                  ...normalized,
+                }
+              : item
+        )
+    );
+
+    logUserChat(
+      "실시간 메시지 수정 이벤트 수신",
+      {
+        sessionId:
+          targetSessionId,
+        messageId:
+          normalized.messageId,
+        text:
+          normalized.text,
+      }
+    );
+  };
+
+  const handleRealtimeStatusMessage = (
+    targetSessionId,
+    payload
+  ) => {
+    if (
+      !payload ||
+      typeof payload !==
+        "object"
+    ) {
+      return;
+    }
+
+    if (
+      payload.sessionId != null &&
+      String(
+        payload.sessionId
+      ) !==
+        String(
+          targetSessionId
+        )
+    ) {
+      return;
+    }
+
+    const nextStatus =
+      String(
+        payload.status || ""
+      )
+        .trim()
+        .toUpperCase();
+
+    logUserChat(
+      "실시간 세션 상태 수신",
+      {
+        sessionId:
+          targetSessionId,
+        status:
+          nextStatus,
+        message:
+          payload.message ||
+          null,
+      }
+    );
+
+    if (
+      !CLOSED_SESSION_STATUSES.has(
+        nextStatus
+      )
+    ) {
+      return;
+    }
+
+    stopRealtimeSubscription();
+
+    if (
+      isEndingRef.current ||
+      remoteEndHandledRef.current
+    ) {
+      return;
+    }
+
+    remoteEndHandledRef.current =
+      true;
+
+    Alert.alert(
+      "안내",
+      payload.message ||
+        "통화가 종료되었습니다.",
+      [
+        {
+          text: "확인",
+          onPress: () =>
+            moveToIdleMainTab(
+              {
+                screen:
+                  "히스토리",
+                endedSessionId:
+                  targetSessionId,
+              }
+            ),
+        },
+      ]
+    );
+  };
+
+  // =========================================================
+  // STOMP session topic 구독 시작
+  // =========================================================
+
+  const startRealtimeSubscription = (
+    targetSessionId
+  ) => {
+    stopRealtimeSubscription();
+
+    if (
+      !targetSessionId
+    ) {
+      return;
+    }
+
+    realtimePartialRef.current =
+      "";
+
+    if (
+      isMountedRef.current
+    ) {
+      setRealtimePartial("");
+    }
+
+    remoteEndHandledRef.current =
+      false;
 
     lastMessageSignatureRef.current =
       null;
@@ -1767,37 +2410,46 @@ export default function IntercomChatScreen() {
       false;
 
     logUserChat(
-      "메시지 polling 시작",
+      "실시간 STOMP 구독 시작",
       {
         sessionId:
           targetSessionId,
-
-        intervalMs:
-          1500,
       }
     );
 
-    /**
-     * 최초 즉시 조회
-     */
-    fetchSessionMessages({
-      targetSessionId,
-      activeToken,
-      shouldVibrate: false,
-    });
+    realtimeUnsubscribeRef.current =
+      subscribeSessionTopics(
+        targetSessionId,
+        {
+          onRealtimeTranscript:
+            (payload) =>
+              handleRealtimeTranscriptMessage(
+                targetSessionId,
+                payload
+              ),
 
-    /**
-     * 이후 1.5초 간격
-     */
-    pollingRef.current =
-      setInterval(() => {
-        fetchSessionMessages({
-          targetSessionId,
-          activeToken,
-          shouldVibrate:
-            true,
-        });
-      }, 1500);
+          onMessage:
+            (payload) =>
+              handleRealtimeConversationMessage(
+                targetSessionId,
+                payload
+              ),
+
+          onMessageUpdate:
+            (payload) =>
+              handleRealtimeMessageUpdate(
+                targetSessionId,
+                payload
+              ),
+
+          onStatus:
+            (payload) =>
+              handleRealtimeStatusMessage(
+                targetSessionId,
+                payload
+              ),
+        }
+      );
   };
 
   // =========================================================
@@ -1812,7 +2464,7 @@ export default function IntercomChatScreen() {
       isMountedRef.current =
         false;
 
-      stopMessagePolling();
+      stopRealtimeSubscription();
 
       Vibration.cancel();
     };
@@ -1960,7 +2612,7 @@ export default function IntercomChatScreen() {
             true
           );
 
-          stopMessagePolling();
+          stopRealtimeSubscription();
 
           pairingErrorHandledRef.current =
             false;
@@ -2340,12 +2992,30 @@ export default function IntercomChatScreen() {
           }
 
           // =============================================
-          // 메시지 polling 시작
+          // 기존 메시지 최초 1회 조회
           // =============================================
 
-          startMessagePolling(
-            initialSessionId,
-            activeToken
+          await fetchSessionMessages({
+            targetSessionId:
+              initialSessionId,
+            activeToken,
+            shouldVibrate:
+              false,
+          });
+
+          if (
+            pairingErrorHandledRef.current ||
+            authErrorHandledRef.current
+          ) {
+            return;
+          }
+
+          // =============================================
+          // 이후 실시간 STOMP 구독
+          // =============================================
+
+          startRealtimeSubscription(
+            initialSessionId
           );
         } catch (error) {
           const serverError =
@@ -2395,10 +3065,10 @@ export default function IntercomChatScreen() {
     return () => {
       isCancelled = true;
 
-      stopMessagePolling();
+      stopRealtimeSubscription();
 
       logUserChat(
-        "화면 이탈 - polling 정리"
+        "화면 이탈 - 실시간 구독 정리"
       );
     };
   }, [initialSessionId]);
@@ -2442,7 +3112,7 @@ export default function IntercomChatScreen() {
         false
       );
 
-      stopMessagePolling();
+      stopRealtimeSubscription();
 
       const activeSessionId =
         currentSessionId ||
@@ -2619,15 +3289,14 @@ export default function IntercomChatScreen() {
           );
 
           /**
-           * 종료 실패했으니 다시 메시지 polling
+           * 종료 요청이 실패했으니 실시간 구독을 다시 시작.
            */
           if (
             activeSessionId &&
             activeToken
           ) {
-            startMessagePolling(
-              activeSessionId,
-              activeToken
+            startRealtimeSubscription(
+              activeSessionId
             );
           }
         }
@@ -2729,26 +3398,67 @@ export default function IntercomChatScreen() {
       }
 
       setMessages(
-        (prev) => [
-          ...prev,
+        (prev) => {
+          /**
+           * WebSocket의 정식 메시지가 HTTP 응답보다 먼저 도착한 경우
+           * 같은 내용의 local 말풍선을 또 추가하지 않는다.
+           */
+          const alreadyExists =
+            [...prev]
+              .reverse()
+              .slice(0, 5)
+              .some(
+                (item) =>
+                  item.type ===
+                    "send" &&
+                  String(
+                    item.text || ""
+                  ).trim() ===
+                    safeText
+              );
 
-          {
-            id:
-              `local-send-${Date.now()}`,
+          if (
+            alreadyExists
+          ) {
+            return prev;
+          }
 
-            text:
-              safeText,
+          return [
+            ...prev,
 
-            type:
-              "send",
+            {
+              id:
+                `local-send-${Date.now()}`,
 
-            time:
-              getTimeString(),
+              messageId:
+                null,
 
-            createdAt:
-              "",
-          },
-        ]
+              transcriptId:
+                null,
+
+              text:
+                safeText,
+
+              type:
+                "send",
+
+              senderType:
+                "USER",
+
+              messageType:
+                "QUICK_REPLY",
+
+              originalContent:
+                null,
+
+              time:
+                getTimeString(),
+
+              createdAt:
+                new Date().toISOString(),
+            },
+          ];
+        }
       );
     };
 
@@ -2879,16 +3589,11 @@ export default function IntercomChatScreen() {
         setSelectedTags([]);
 
         /**
-         * 서버 DB 저장된 메시지로 다시 동기화.
+         * 이후 서버의 /messages WebSocket 이벤트가 오면
+         * local-send 말풍선을 정식 messageId 메시지로 교체한다.
+         *
+         * 더 이상 전송 직후 REST 재조회는 하지 않는다.
          */
-        await fetchSessionMessages(
-          {
-            targetSessionId,
-            activeToken,
-            shouldVibrate:
-              false,
-          }
-        );
       } catch (error) {
         const serverStatus =
           error.response
@@ -2953,7 +3658,7 @@ export default function IntercomChatScreen() {
           serverStatus === 409 ||
           serverStatus === 410
         ) {
-          stopMessagePolling();
+          stopRealtimeSubscription();
 
           Alert.alert(
             "안내",
@@ -3164,6 +3869,25 @@ export default function IntercomChatScreen() {
                     </SendBubbleText>
                   </SendBubble>
                 )
+            )}
+
+            {Boolean(
+              String(
+                realtimePartial ||
+                  ""
+              ).trim()
+            ) && (
+              <ReceiveBubble
+                key="realtime-partial"
+              >
+                <BubbleTextContainer>
+                  <ReceiveBubbleText>
+                    {
+                      realtimePartial
+                    }
+                  </ReceiveBubbleText>
+                </BubbleTextContainer>
+              </ReceiveBubble>
             )}
           </ScrollView>
         )}

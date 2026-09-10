@@ -20,6 +20,7 @@ import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-contex
 import styled from "styled-components/native";
 
 import BASE_URL from "../../api/config";
+import { subscribeSessionTopics } from "../../services/realtimeSocket";
 
 const backIcon = require("../../assets/back_icon.png");
 const pencilIcon = require("../../assets/pencil_icon.png");
@@ -56,12 +57,23 @@ export default function AdminMonitoringDetailScreen() {
   const isMountedRef = useRef(true);
   const endedSessionRef = useRef(false);
 
+  // 현재 관리자 상세 화면의 STOMP 구독 해제 함수
+  const realtimeUnsubscribeRef = useRef(null);
+
+  // Python partial STT의 현재 누적 문장
+  const realtimePartialRef = useRef("");
+
+  // final 이벤트가 별도로 오지 않는 현재 백엔드 구조에서
+  // 이전 partial을 화면에 남길 때 사용할 로컬 ID 순번
+  const realtimeUtteranceSeqRef = useRef(0);
+
   const { sessionId, item: passedItem } = route.params || {};
 
   const targetSessionId =
     sessionId ?? passedItem?.sessionId ?? passedItem?.id ?? null;
 
   const [chatMessages, setChatMessages] = useState([]);
+  const [realtimePartial, setRealtimePartial] = useState("");
   const [sessionInfo, setSessionInfo] = useState(passedItem || {});
   const [isLoading, setIsLoading] = useState(true);
   const [currentStt, setCurrentStt] = useState("");
@@ -285,6 +297,396 @@ export default function AdminMonitoringDetailScreen() {
     return [];
   };
 
+  // =========================================================
+  // WebSocket / STOMP 실시간 자막
+  // =========================================================
+
+  const stopRealtimeSubscription = () => {
+    if (!realtimeUnsubscribeRef.current) {
+      return;
+    }
+
+    try {
+      realtimeUnsubscribeRef.current();
+    } catch (error) {
+      logMonitoringDetail(
+        "실시간 STOMP 구독 해제 실패",
+        error?.message
+      );
+    }
+
+    realtimeUnsubscribeRef.current = null;
+
+    logMonitoringDetail("실시간 STOMP 구독 중지", {
+      sessionId: targetSessionId,
+    });
+  };
+
+  const clearRealtimePartial = () => {
+    realtimePartialRef.current = "";
+
+    if (isMountedRef.current) {
+      setRealtimePartial("");
+    }
+  };
+
+  /**
+   * 현재 백엔드는 realtime-transcripts에서 partial만 보내고,
+   * Python final 수신 시에는 transcript_chunks DB 저장만 한다.
+   *
+   * 따라서 새 발화의 partial이 시작되면 직전 partial을
+   * 관리자 화면에 로컬 기록으로 남겨둔다.
+   *
+   * 이 로컬 기록은 messageId / transcriptId가 없으므로
+   * 관리자 PATCH 수정 대상으로 선택하지 않는다.
+   */
+  const commitRealtimePartial = (text) => {
+    const safeText = String(text || "").trim();
+
+    if (!safeText || !isMountedRef.current) {
+      return;
+    }
+
+    const localId =
+      `realtime-admin-${targetSessionId}-${Date.now()}-${++realtimeUtteranceSeqRef.current}`;
+
+    setChatMessages((prev) => {
+      const duplicateIndex = prev.findIndex(
+        (item) =>
+          item.__realtimeOnly === true &&
+          String(getMessageText(item)).trim() === safeText
+      );
+
+      if (duplicateIndex >= 0) {
+        return prev;
+      }
+
+      return [
+        ...prev,
+        {
+          id: localId,
+          messageId: null,
+          transcriptId: null,
+          senderType: "VISITOR",
+          messageType: "REALTIME_STT",
+          content: safeText,
+          text: safeText,
+          originalContent: null,
+          createdAt: new Date().toISOString(),
+          __realtimeOnly: true,
+        },
+      ];
+    });
+  };
+
+  const handleRealtimeTranscript = (sessionId, payload) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+
+    if (
+      payload.sessionId != null &&
+      String(payload.sessionId) !== String(sessionId)
+    ) {
+      return;
+    }
+
+    const realtimeType = String(payload.type || "")
+      .trim()
+      .toLowerCase();
+
+    if (realtimeType !== "partial") {
+      return;
+    }
+
+    const nextText = String(payload.text || "").trim();
+
+    if (!nextText) {
+      return;
+    }
+
+    const previousText = String(
+      realtimePartialRef.current || ""
+    ).trim();
+
+    /*
+     * Spring RealtimeSttClient는 같은 발화 동안 delta를 buffer에 append해서
+     * 누적 전체 문자열을 보내므로 같은 발화라면 nextText가 previousText로
+     * 시작한다. final에서 buffer가 제거된 뒤 다음 발화가 오면 새 문자열로
+     * 다시 시작한다.
+     */
+    const isNewUtterance =
+      Boolean(previousText) &&
+      nextText !== previousText &&
+      !nextText.startsWith(previousText);
+
+    if (isNewUtterance) {
+      commitRealtimePartial(previousText);
+    }
+
+    realtimePartialRef.current = nextText;
+
+    if (isMountedRef.current) {
+      setRealtimePartial(nextText);
+    }
+
+    logMonitoringDetail("실시간 partial STT 수신", {
+      sessionId,
+      text: nextText,
+      newUtterance: isNewUtterance,
+    });
+
+    setTimeout(() => {
+      if (isMountedRef.current) {
+        scrollChatToBottom(true);
+      }
+    }, 50);
+  };
+
+  const handleRealtimeConversationMessage = (sessionId, payload) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+
+    if (
+      payload.sessionId != null &&
+      String(payload.sessionId) !== String(sessionId)
+    ) {
+      return;
+    }
+
+    /*
+     * SessionService.sendReply()는 같은 /messages topic에
+     * ConversationMessageResponse와 ReplyMessage를 둘 다 보낸다.
+     * DB에 저장된 정식 메시지는 messageId가 있으므로,
+     * messageId 없는 보조 ReplyMessage는 중복 표시 방지를 위해 무시한다.
+     */
+    if (payload.messageId == null) {
+      logMonitoringDetail(
+        "messageId 없는 보조 메시지 이벤트 무시",
+        payload
+      );
+      return;
+    }
+
+    const incoming = normalizeMessages([payload])[0];
+
+    if (!incoming || !isMountedRef.current) {
+      return;
+    }
+
+    const incomingText = String(getMessageText(incoming)).trim();
+    const incomingIsVisitor = isVisitorMessage(incoming);
+
+    if (incomingIsVisitor) {
+      const currentPartial = String(
+        realtimePartialRef.current || ""
+      ).trim();
+
+      if (currentPartial && currentPartial === incomingText) {
+        clearRealtimePartial();
+      }
+    }
+
+    setChatMessages((prev) => {
+      const next = [...prev];
+
+      const persistedIndex = next.findIndex(
+        (item) =>
+          item.messageId != null &&
+          String(item.messageId) === String(incoming.messageId)
+      );
+
+      if (persistedIndex >= 0) {
+        next[persistedIndex] = {
+          ...next[persistedIndex],
+          ...incoming,
+          __realtimeOnly: false,
+        };
+
+        return next;
+      }
+
+      // 같은 방문자 문장을 partial 로컬 기록으로 이미 남겨둔 경우
+      // 정식 DB 메시지로 교체한다.
+      if (incomingIsVisitor) {
+        const realtimeIndex = next.findIndex(
+          (item) =>
+            item.__realtimeOnly === true &&
+            isVisitorMessage(item) &&
+            String(getMessageText(item)).trim() === incomingText
+        );
+
+        if (realtimeIndex >= 0) {
+          next[realtimeIndex] = {
+            ...incoming,
+            __realtimeOnly: false,
+          };
+
+          return next;
+        }
+      }
+
+      next.push({
+        ...incoming,
+        __realtimeOnly: false,
+      });
+
+      return next;
+    });
+
+    logMonitoringDetail("실시간 저장 메시지 수신", {
+      sessionId,
+      messageId: incoming.messageId,
+      senderType: incoming.senderType || null,
+      text: incomingText,
+    });
+
+    setTimeout(() => {
+      if (isMountedRef.current) {
+        scrollChatToBottom(true);
+      }
+    }, 50);
+  };
+
+  const handleRealtimeMessageUpdate = (sessionId, payload) => {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      payload.messageId == null
+    ) {
+      return;
+    }
+
+    if (
+      payload.sessionId != null &&
+      String(payload.sessionId) !== String(sessionId)
+    ) {
+      return;
+    }
+
+    const incoming = normalizeMessages([payload])[0];
+
+    if (!incoming || !isMountedRef.current) {
+      return;
+    }
+
+    const incomingKey = toKey(incoming.messageId);
+
+    setChatMessages((prev) =>
+      prev.map((item, idx) => {
+        const itemMessageId = item.messageId;
+
+        if (
+          itemMessageId != null &&
+          String(itemMessageId) === String(incoming.messageId)
+        ) {
+          return {
+            ...item,
+            ...incoming,
+            __realtimeOnly: false,
+          };
+        }
+
+        return item;
+      })
+    );
+
+    if (selectedMessageKey === incomingKey) {
+      setCurrentStt(String(getMessageText(incoming)).trim());
+    }
+
+    logMonitoringDetail("실시간 메시지 수정 이벤트 수신", {
+      sessionId,
+      messageId: incoming.messageId,
+      text: getMessageText(incoming),
+    });
+  };
+
+  const handleRealtimeStatus = (sessionId, payload) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+
+    if (
+      payload.sessionId != null &&
+      String(payload.sessionId) !== String(sessionId)
+    ) {
+      return;
+    }
+
+    const nextStatus = normalizeStatus(payload.status);
+
+    if (!nextStatus) {
+      return;
+    }
+
+    logMonitoringDetail("실시간 세션 상태 수신", {
+      sessionId,
+      status: nextStatus,
+      message: payload.message || null,
+    });
+
+    setSessionInfo((prev) => {
+      const next = {
+        ...prev,
+        status: nextStatus,
+      };
+
+      if (CLOSED_SESSION_STATUSES.has(nextStatus)) {
+        next.endedAt = prev.endedAt || new Date().toISOString();
+      }
+
+      return next;
+    });
+
+    if (CLOSED_SESSION_STATUSES.has(nextStatus)) {
+      endedSessionRef.current = true;
+
+      const lastPartial = String(
+        realtimePartialRef.current || ""
+      ).trim();
+
+      if (lastPartial) {
+        commitRealtimePartial(lastPartial);
+        clearRealtimePartial();
+      }
+
+      stopRealtimeSubscription();
+    }
+  };
+
+  const startRealtimeSubscription = (sessionId) => {
+    stopRealtimeSubscription();
+
+    if (!sessionId || endedSessionRef.current) {
+      return;
+    }
+
+    clearRealtimePartial();
+
+    logMonitoringDetail("실시간 STOMP 구독 시작", {
+      sessionId,
+    });
+
+    realtimeUnsubscribeRef.current = subscribeSessionTopics(
+      sessionId,
+      {
+        onRealtimeTranscript: (payload) =>
+          handleRealtimeTranscript(sessionId, payload),
+
+        onMessage: (payload) =>
+          handleRealtimeConversationMessage(sessionId, payload),
+
+        onMessageUpdate: (payload) =>
+          handleRealtimeMessageUpdate(sessionId, payload),
+
+        onStatus: (payload) =>
+          handleRealtimeStatus(sessionId, payload),
+      }
+    );
+  };
+
   const fetchLiveChatLogs = async (isSilent = false) => {
     if (!targetSessionId) {
       logMonitoringDetail("상세 조회 중단 - sessionId 없음");
@@ -357,7 +759,7 @@ export default function AdminMonitoringDetailScreen() {
 
         if (ended) {
           logMonitoringDetail(
-            "종료된 세션 감지 - polling 중단 대상",
+            "종료된 세션 감지 - 실시간 구독 시작 안 함",
             {
               sessionId: targetSessionId,
               status: getSessionStatus(nextSessionInfo),
@@ -429,6 +831,7 @@ export default function AdminMonitoringDetailScreen() {
 
     return () => {
       isMountedRef.current = false;
+      stopRealtimeSubscription();
     };
   }, []);
 
@@ -453,83 +856,67 @@ export default function AdminMonitoringDetailScreen() {
   }, []);
 
   useEffect(() => {
-    if (isFocused) {
+    let cancelled = false;
+
+    if (!isFocused || !targetSessionId) {
+      stopRealtimeSubscription();
+      return undefined;
+    }
+
+    const initializeRealtimeMonitoring = async () => {
       logMonitoringDetail("화면 포커스", {
         sessionId: targetSessionId,
       });
 
-      fetchLiveChatLogs(false);
-    }
-  }, [isFocused, targetSessionId]);
+      stopRealtimeSubscription();
+      clearRealtimePartial();
 
-  useEffect(() => {
-    if (!isFocused || !targetSessionId) return;
+      // 기존 저장 메시지와 세션 정보는 REST로 최초 1회 조회한다.
+      await fetchLiveChatLogs(false);
 
-    if (
-      isEndedSession(sessionInfo) ||
-      endedSessionRef.current
-    ) {
-      logMonitoringDetail(
-        "종료된 세션 - polling 시작 안 함",
-        {
-          sessionId: targetSessionId,
-          status: getSessionStatus(sessionInfo),
-        }
-      );
-
-      return;
-    }
-
-    logMonitoringDetail("상세 polling 시작", {
-      sessionId: targetSessionId,
-      intervalMs: 3000,
-    });
-
-    const intervalId = setInterval(() => {
       if (
-        endedSessionRef.current ||
-        isEndedSession(sessionInfo)
+        cancelled ||
+        !isMountedRef.current ||
+        endedSessionRef.current
       ) {
-        clearInterval(intervalId);
-
-        logMonitoringDetail(
-          "종료된 세션 감지 - polling 중지",
-          {
-            sessionId: targetSessionId,
-            status: getSessionStatus(sessionInfo),
-          }
-        );
-
         return;
       }
 
-      fetchLiveChatLogs(true);
-    }, 3000);
+      // 이후 변화는 WebSocket/STOMP으로 받는다.
+      startRealtimeSubscription(targetSessionId);
+    };
+
+    initializeRealtimeMonitoring();
 
     return () => {
-      clearInterval(intervalId);
+      cancelled = true;
+      stopRealtimeSubscription();
 
-      logMonitoringDetail("상세 polling 중지", {
+      logMonitoringDetail("화면 이탈 - 실시간 구독 정리", {
         sessionId: targetSessionId,
       });
     };
-  }, [
-    isFocused,
-    targetSessionId,
-    sessionInfo?.status,
-    sessionInfo?.sessionStatus,
-    sessionInfo?.callStatus,
-    sessionInfo?.state,
-    sessionInfo?.endedAt,
-    sessionInfo?.endTime,
-    sessionInfo?.closedAt,
-  ]);
+  }, [isFocused, targetSessionId]);
 
   const handleSelectMessage = (msg, idx) => {
     const messageKey = toKey(getMessageId(msg, idx));
     const text = String(getMessageText(msg)).trim();
 
     if (!text) return;
+
+    // messageId / transcriptId가 없는 실시간 partial 기록은
+    // 백엔드 PATCH 대상이 아니므로 선택하지 않는다.
+    if (msg.__realtimeOnly) {
+      logMonitoringDetail(
+        "실시간 임시 자막 선택 무시 - 저장 ID 없음",
+        {
+          key: messageKey,
+          text,
+        }
+      );
+
+      return;
+    }
 
     setSelectedMessageKey(messageKey);
     setCurrentStt(text);
@@ -651,12 +1038,35 @@ export default function AdminMonitoringDetailScreen() {
         return;
       }
 
+      const updatedText = currentStt.trim();
+
+      // conversation-message 수정은 백엔드가 /messages/update도 보내지만,
+      // 관리자 본인 화면에는 즉시 반영해 체감 지연을 없앤다.
+      // transcript 수정 경로는 별도 update topic이 없으므로 이 로컬 반영이 필요하다.
+      if (isMountedRef.current) {
+        setChatMessages((prev) =>
+          prev.map((msg, idx) => {
+            const key = toKey(getMessageId(msg, idx));
+
+            if (key !== selectedMessageKey) {
+              return msg;
+            }
+
+            return {
+              ...msg,
+              content: updatedText,
+              text: updatedText,
+            };
+          })
+        );
+
+        setCurrentStt(updatedText);
+      }
+
       Alert.alert(
         "완료",
         "수정 내용이 반영되었습니다."
       );
-
-      await fetchLiveChatLogs(true);
     } catch (error) {
       const serverError =
         error.response?.data?.message ||
@@ -867,65 +1277,42 @@ export default function AdminMonitoringDetailScreen() {
                   padding: 20,
                 }}
               >
-                {chatMessages.length > 0 ? (
-                  chatMessages.map((msg, idx) => {
-                    const currentKey = toKey(
-                      getMessageId(msg, idx)
-                    );
+                {chatMessages.length > 0 ||
+                Boolean(String(realtimePartial || "").trim()) ? (
+                  <>
+                    {chatMessages.map((msg, idx) => {
+                      const currentKey = toKey(
+                        getMessageId(msg, idx)
+                      );
 
-                    const isSelected =
-                      selectedMessageKey === currentKey;
+                      const isSelected =
+                        selectedMessageKey === currentKey;
 
-                    const isVisitor =
-                      isVisitorMessage(msg);
+                      const isVisitor = isVisitorMessage(msg);
 
-                    const msgTime = formatMessageTime(
-                      msg.createdAt ||
-                        msg.timestamp ||
-                        msg.time
-                    );
+                      const msgTime = formatMessageTime(
+                        msg.createdAt ||
+                          msg.timestamp ||
+                          msg.time
+                      );
 
-                    const text = String(
-                      getMessageText(msg)
-                    ).trim();
+                      const text = String(
+                        getMessageText(msg)
+                      ).trim();
 
-                    if (!text) return null;
+                      if (!text) return null;
 
-                    if (
-                      text === "실시간 자막 변환 중..."
-                    ) {
-                      return null;
-                    }
+                      if (
+                        text === "실시간 자막 변환 중..." ||
+                        text === "실시간 자막 변환 중" ||
+                        text === "실시간 자막 확인 중..." ||
+                        text === "실시간 자막 확인 중"
+                      ) {
+                        return null;
+                      }
 
-                    if (
-                      text === "실시간 자막 변환 중"
-                    ) {
-                      return null;
-                    }
-
-                    if (
-                      text === "실시간 자막 확인 중..."
-                    ) {
-                      return null;
-                    }
-
-                    if (
-                      text === "실시간 자막 확인 중"
-                    ) {
-                      return null;
-                    }
-
-                    return (
-                      <TouchableOpacity
-                        key={currentKey}
-                        activeOpacity={0.85}
-                        onPress={() =>
-                          handleSelectMessage(msg, idx)
-                        }
-                      >
-                        <BubbleWrapper
-                          isVisitor={isVisitor}
-                        >
+                      const bubbleContent = (
+                        <BubbleWrapper isVisitor={isVisitor}>
                           {!isVisitor && (
                             <TimeTextRight>
                               {msgTime}
@@ -936,9 +1323,7 @@ export default function AdminMonitoringDetailScreen() {
                             isVisitor={isVisitor}
                             isSelected={isSelected}
                           >
-                            <BubbleText
-                              isVisitor={isVisitor}
-                            >
+                            <BubbleText isVisitor={isVisitor}>
                               {text}
                             </BubbleText>
                           </BubbleBox>
@@ -949,9 +1334,46 @@ export default function AdminMonitoringDetailScreen() {
                             </TimeTextLeft>
                           )}
                         </BubbleWrapper>
-                      </TouchableOpacity>
-                    );
-                  })
+                      );
+
+                      // final 이벤트가 별도로 오지 않아 로컬에 남겨둔
+                      // partial 기록은 서버 ID가 없으므로 수정 선택 불가.
+                      if (msg.__realtimeOnly) {
+                        return (
+                          <View key={currentKey}>
+                            {bubbleContent}
+                          </View>
+                        );
+                      }
+
+                      return (
+                        <TouchableOpacity
+                          key={currentKey}
+                          activeOpacity={0.85}
+                          onPress={() =>
+                            handleSelectMessage(msg, idx)
+                          }
+                        >
+                          {bubbleContent}
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                    {Boolean(
+                      String(realtimePartial || "").trim()
+                    ) && (
+                      <BubbleWrapper isVisitor>
+                        <BubbleBox
+                          isVisitor
+                          isSelected={false}
+                        >
+                          <BubbleText isVisitor>
+                            {realtimePartial}
+                          </BubbleText>
+                        </BubbleBox>
+                      </BubbleWrapper>
+                    )}
+                  </>
                 ) : (
                   <EmptyWrapper>
                     <EmptyText>

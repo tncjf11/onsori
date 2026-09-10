@@ -13,7 +13,6 @@ import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-contex
 import { useNavigation, useIsFocused } from "@react-navigation/native";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 
 import BASE_URL from "../../api/config";
@@ -31,34 +30,57 @@ const logoutOverlayImg = require("../../assets/logout_overlay.png");
 const deleteUserOverlayImg = require("../../assets/delete_user_overlay.png");
 
 /**
+ * =========================================================
+ * Expo Go 여부
+ * =========================================================
+ *
+ * Expo Go에서는 Android Remote Push가 지원되지 않으므로
+ * expo-notifications 자체를 불러오지 않는다.
+ *
+ * 중요:
+ * 파일 상단에서
+ *
+ * import * as Notifications from "expo-notifications";
+ *
+ * 를 하지 않는다.
+ *
+ * 그래야 Expo Go 실행 시 expo-notifications 모듈 때문에
+ * WARN / ERROR 메시지가 뜨는 것을 막을 수 있다.
+ */
+const IS_EXPO_GO =
+  Constants.appOwnership === "expo";
+
+/**
+ * =========================================================
+ * Logout Storage
+ * =========================================================
+ *
  * 로그아웃할 때 삭제할 정보
  *
- * ★ 중요
- *
- * 아래 QR 인증 정보는 삭제하지 않는다.
+ * 아래 QR 인증 정보는 삭제하지 않음:
  *
  * deviceUid
  * isVerifiedUser
  * pairedUserId
  *
- * 그래야 같은 사용자가 다시 로그인할 때
- * QR을 다시 찍지 않아도 된다.
+ * 같은 계정으로 다시 로그인하면
+ * QR 재인증 없이 사용할 수 있게 유지.
  */
 const LOGOUT_STORAGE_KEYS = [
   "accessToken",
   "userName",
   "userId",
 
-  // 다음 로그인 사용자 기준으로 push token을 다시 등록하기 위해 삭제
+  // 다음 로그인 사용자 기준 Push Token 재등록
   "isPushTokenSaved",
   "registeredPushToken",
 
-  // 진행 중이던 통화 정보
+  // 진행 중 통화 정보
   "callStartTime",
 ];
 
 /**
- * 사용자 설정은 로그아웃해도 유지
+ * 아래 사용자 설정도 로그아웃해도 유지:
  *
  * callVibrate
  * callSound
@@ -73,31 +95,49 @@ export default function SettingScreen() {
   // 알림 설정
   // =========================================================
 
-  const [isVibrateCall, setIsVibrateCall] = useState(false);
-  const [isSoundCall, setIsSoundCall] = useState(false);
-  const [isVibrateSubtitle, setIsVibrateSubtitle] = useState(false);
+  const [isVibrateCall, setIsVibrateCall] =
+    useState(false);
+
+  const [isSoundCall, setIsSoundCall] =
+    useState(false);
+
+  const [
+    isVibrateSubtitle,
+    setIsVibrateSubtitle,
+  ] = useState(false);
 
   // =========================================================
   // 사용자 정보
   // =========================================================
 
-  const [userName, setUserName] = useState("로딩 중...");
-  const [userId, setUserId] = useState("로딩 중...");
+  const [userName, setUserName] =
+    useState("로딩 중...");
+
+  const [userId, setUserId] =
+    useState("로딩 중...");
 
   // =========================================================
   // Modal
   // =========================================================
 
-  const [isLogoutModalVisible, setIsLogoutModalVisible] = useState(false);
+  const [
+    isLogoutModalVisible,
+    setIsLogoutModalVisible,
+  ] = useState(false);
 
-  const [isDeleteUserModalVisible, setIsDeleteUserModalVisible] =
-    useState(false);
+  const [
+    isDeleteUserModalVisible,
+    setIsDeleteUserModalVisible,
+  ] = useState(false);
 
   // =========================================================
-  // Push Token 서버 오류 표시
+  // Push 서버 오류 표시
   // =========================================================
 
-  const [showErrorBanner, setShowErrorBanner] = useState(false);
+  const [
+    showErrorBanner,
+    setShowErrorBanner,
+  ] = useState(false);
 
   // =========================================================
   // 설정 / 사용자 정보 불러오기
@@ -119,20 +159,38 @@ export default function SettingScreen() {
         AsyncStorage.getItem("userId"),
       ]);
 
-      setIsVibrateCall(vCall === "true");
-      setIsSoundCall(sCall === "true");
-      setIsVibrateSubtitle(vSub === "true");
+      setIsVibrateCall(
+        vCall === "true"
+      );
 
-      setUserName(savedName || "카카오 연동 유저");
-      setUserId(savedId || "정보 없음");
+      setIsSoundCall(
+        sCall === "true"
+      );
 
-      console.log("[SETTING] 설정 정보 로드 완료", {
-        userId: savedId,
-        userName: savedName,
-        callVibrate: vCall,
-        callSound: sCall,
-        subtitleVibrate: vSub,
-      });
+      setIsVibrateSubtitle(
+        vSub === "true"
+      );
+
+      setUserName(
+        savedName ||
+          "카카오 연동 유저"
+      );
+
+      setUserId(
+        savedId ||
+          "정보 없음"
+      );
+
+      console.log(
+        "[SETTING] 설정 정보 로드 완료",
+        {
+          userId: savedId,
+          userName: savedName,
+          callVibrate: vCall,
+          callSound: sCall,
+          subtitleVibrate: vSub,
+        }
+      );
     } catch (error) {
       console.error(
         "[SETTING] 설정 정보 로드 실패:",
@@ -148,44 +206,121 @@ export default function SettingScreen() {
   }, [isFocused]);
 
   // =========================================================
+  // expo-notifications 동적 로드
+  // =========================================================
+
+  const getNotificationsModule = () => {
+    /**
+     * Expo Go이면 모듈 자체를 로드하지 않음.
+     *
+     * 이게 이번 수정의 핵심.
+     */
+    if (IS_EXPO_GO) {
+      return null;
+    }
+
+    try {
+      /**
+       * Development Build / Production Build에서만
+       * expo-notifications 로드.
+       */
+      const Notifications =
+        require("expo-notifications");
+
+      return Notifications;
+    } catch (error) {
+      console.log(
+        "[PUSH] expo-notifications 모듈 로드 불가:",
+        error?.message
+      );
+
+      return null;
+    }
+  };
+
+  // =========================================================
   // 실제 Expo Push Token 발급
   // =========================================================
 
   const getRealExpoPushToken = async () => {
+    /**
+     * =====================================================
+     * Expo Go
+     * =====================================================
+     *
+     * Push 기능을 아예 실행하지 않는다.
+     *
+     * expo-notifications 모듈도 로드하지 않기 때문에
+     * Expo Go의 Push 관련 ERROR/WARN이 발생하지 않음.
+     */
+    if (IS_EXPO_GO) {
+      console.log(
+        "[PUSH] Expo Go 환경 - Push Token 등록 생략"
+      );
+
+      return null;
+    }
+
     try {
-      /**
-       * Android Notification Channel
-       */
+      const Notifications =
+        getNotificationsModule();
+
+      if (!Notifications) {
+        return null;
+      }
+
+      // =====================================================
+      // Android Notification Channel
+      // =====================================================
+
       if (Platform.OS === "android") {
         await Notifications.setNotificationChannelAsync(
           "default",
           {
             name: "인터폰 알림",
-            importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
+
+            importance:
+              Notifications.AndroidImportance.MAX,
+
+            vibrationPattern: [
+              0,
+              250,
+              250,
+              250,
+            ],
           }
         );
       }
 
-      /**
-       * 기존 알림 권한 확인
-       */
-      const { status: existingStatus } =
+      // =====================================================
+      // 알림 권한 확인
+      // =====================================================
+
+      const {
+        status: existingStatus,
+      } =
         await Notifications.getPermissionsAsync();
 
-      let finalStatus = existingStatus;
+      let finalStatus =
+        existingStatus;
 
-      /**
-       * 아직 허용하지 않았다면 권한 요청
-       */
-      if (existingStatus !== "granted") {
+      // =====================================================
+      // 권한 요청
+      // =====================================================
+
+      if (
+        existingStatus !== "granted"
+      ) {
         const { status } =
           await Notifications.requestPermissionsAsync();
 
-        finalStatus = status;
+        finalStatus =
+          status;
       }
 
-      if (finalStatus !== "granted") {
+      if (
+        finalStatus !== "granted"
+      ) {
         console.log(
           "[PUSH] 알림 권한이 허용되지 않았습니다."
         );
@@ -193,54 +328,57 @@ export default function SettingScreen() {
         return null;
       }
 
-      /**
-       * EAS Project ID
-       */
+      // =====================================================
+      // EAS Project ID
+      // =====================================================
+
       const projectId =
-        Constants?.expoConfig?.extra?.eas?.projectId ??
-        Constants?.easConfig?.projectId;
+        Constants?.expoConfig
+          ?.extra?.eas
+          ?.projectId ??
+        Constants?.easConfig
+          ?.projectId;
 
       if (!projectId) {
-        console.warn(
-          "[PUSH] EAS projectId를 찾을 수 없습니다."
+        console.log(
+          "[PUSH] EAS projectId 없음 - Push Token 발급 생략"
         );
 
         return null;
       }
 
-      /**
-       * 실제 Expo Push Token 발급
-       */
+      // =====================================================
+      // Expo Push Token
+      // =====================================================
+
       const tokenResponse =
         await Notifications.getExpoPushTokenAsync({
           projectId,
         });
 
-      const expoPushToken = tokenResponse?.data;
+      const expoPushToken =
+        tokenResponse?.data;
 
       if (!expoPushToken) {
-        console.warn(
-          "[PUSH] Expo Push Token 발급 실패"
+        console.log(
+          "[PUSH] Expo Push Token 발급 결과 없음"
         );
 
         return null;
       }
 
       console.log(
-        "[PUSH] 실제 Expo Push Token 발급 완료:",
-        expoPushToken
+        "[PUSH] Expo Push Token 발급 완료"
       );
 
       return expoPushToken;
     } catch (error) {
       /**
-       * Expo Go 등 Push Token을 사용할 수 없는 환경에서
-       * 여기로 들어올 수 있음.
-       *
-       * 앱 전체 동작을 막지는 않는다.
+       * Push 관련 문제는
+       * 앱 전체 기능을 막지 않음.
        */
-      console.warn(
-        "[PUSH] Push Token 발급 불가:",
+      console.log(
+        "[PUSH] Push Token 발급 생략:",
         error?.message
       );
 
@@ -250,13 +388,36 @@ export default function SettingScreen() {
 
   // =========================================================
   // Push Token 서버 등록
+  //
   // POST /api/push-tokens
   // =========================================================
 
   const savePushTokenToServer = async () => {
+    /**
+     * =====================================================
+     * Expo Go에서는 여기서 바로 종료
+     * =====================================================
+     *
+     * Push Token 요청 X
+     * 권한 요청 X
+     * expo-notifications 로드 X
+     * 서버 POST X
+     */
+    if (IS_EXPO_GO) {
+      setShowErrorBanner(false);
+
+      console.log(
+        "[PUSH] Expo Go 환경 - Push 기능 비활성"
+      );
+
+      return;
+    }
+
     try {
       const accessToken =
-        await AsyncStorage.getItem("accessToken");
+        await AsyncStorage.getItem(
+          "accessToken"
+        );
 
       if (!accessToken) {
         console.log(
@@ -266,20 +427,22 @@ export default function SettingScreen() {
         return;
       }
 
-      /**
-       * 실제 Expo Token 가져오기
-       */
+      // =====================================================
+      // 실제 Expo Token
+      // =====================================================
+
       const expoPushToken =
         await getRealExpoPushToken();
 
       /**
-       * Push Token 발급 자체가 불가능한 환경이면
-       * 서버 요청을 보내지 않는다.
+       * Push Token 발급 자체가 불가능하면
+       * 서버 요청하지 않음.
        *
-       * 가짜 Token도 절대 보내지 않는다.
+       * 가짜 Token도 전송하지 않음.
        */
       if (!expoPushToken) {
         setShowErrorBanner(false);
+
         return;
       }
 
@@ -287,47 +450,71 @@ export default function SettingScreen() {
         isPushSaved,
         registeredPushToken,
       ] = await Promise.all([
-        AsyncStorage.getItem("isPushTokenSaved"),
-        AsyncStorage.getItem("registeredPushToken"),
+        AsyncStorage.getItem(
+          "isPushTokenSaved"
+        ),
+
+        AsyncStorage.getItem(
+          "registeredPushToken"
+        ),
       ]);
 
-      /**
-       * 이미 정확히 같은 Token을 서버에 등록했다면
-       * 다시 POST 하지 않음.
-       */
+      // =====================================================
+      // 이미 동일 Token 등록 완료
+      // =====================================================
+
       if (
         isPushSaved === "true" &&
-        registeredPushToken === expoPushToken
+        registeredPushToken ===
+          expoPushToken
       ) {
         console.log(
           "[PUSH] 이미 등록된 Push Token"
         );
 
         setShowErrorBanner(false);
+
         return;
       }
 
-      console.log("[PUSH] 서버 등록 요청", {
-        token: expoPushToken,
-      });
-
-      const response = await axios.post(
-        `${BASE_URL}/api/push-tokens`,
-        {
-          token: expoPushToken,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 10000,
-        }
+      console.log(
+        "[PUSH] 서버 등록 요청"
       );
+
+      // =====================================================
+      // 서버 등록
+      // =====================================================
+
+      const response =
+        await axios.post(
+          `${BASE_URL}/api/push-tokens`,
+          {
+            token:
+              expoPushToken,
+          },
+          {
+            headers: {
+              Authorization:
+                `Bearer ${accessToken}`,
+
+              "Content-Type":
+                "application/json",
+            },
+
+            timeout: 10000,
+          }
+        );
 
       console.log(
         "[PUSH] 서버 등록 응답:",
-        response.data
+        {
+          status:
+            response.status,
+
+          success:
+            response.data
+              ?.success,
+        }
       );
 
       if (
@@ -335,8 +522,15 @@ export default function SettingScreen() {
         response.status < 300
       ) {
         await AsyncStorage.multiSet([
-          ["isPushTokenSaved", "true"],
-          ["registeredPushToken", expoPushToken],
+          [
+            "isPushTokenSaved",
+            "true",
+          ],
+
+          [
+            "registeredPushToken",
+            expoPushToken,
+          ],
         ]);
 
         setShowErrorBanner(false);
@@ -359,34 +553,47 @@ export default function SettingScreen() {
           error?.message
       );
 
-      /**
-       * 서버 통신 실패한 경우에만
-       * UI 오류 표시
-       */
       setShowErrorBanner(true);
     }
   };
 
   // =========================================================
-  // 설정 화면 진입 시 Push Token 등록
+  // 화면 진입 시 Push 등록
   // =========================================================
 
   useEffect(() => {
-    if (isFocused) {
-      savePushTokenToServer();
+    if (!isFocused) {
+      return;
     }
+
+    /**
+     * Expo Go에서는
+     * savePushTokenToServer가 바로 종료됨.
+     */
+    savePushTokenToServer();
   }, [isFocused]);
 
   // =========================================================
   // 알림 설정 변경
   // =========================================================
 
-  const toggleSetting = async (type) => {
+  const toggleSetting = async (
+    type
+  ) => {
     try {
-      if (type === "vibrateCall") {
-        const next = !isVibrateCall;
+      // =====================================================
+      // 호출 진동
+      // =====================================================
 
-        setIsVibrateCall(next);
+      if (
+        type === "vibrateCall"
+      ) {
+        const next =
+          !isVibrateCall;
+
+        setIsVibrateCall(
+          next
+        );
 
         await AsyncStorage.setItem(
           "callVibrate",
@@ -401,10 +608,19 @@ export default function SettingScreen() {
         return;
       }
 
-      if (type === "soundCall") {
-        const next = !isSoundCall;
+      // =====================================================
+      // 호출 소리
+      // =====================================================
 
-        setIsSoundCall(next);
+      if (
+        type === "soundCall"
+      ) {
+        const next =
+          !isSoundCall;
+
+        setIsSoundCall(
+          next
+        );
 
         await AsyncStorage.setItem(
           "callSound",
@@ -419,10 +635,20 @@ export default function SettingScreen() {
         return;
       }
 
-      if (type === "vibrateSubtitle") {
-        const next = !isVibrateSubtitle;
+      // =====================================================
+      // 자막 진동
+      // =====================================================
 
-        setIsVibrateSubtitle(next);
+      if (
+        type ===
+        "vibrateSubtitle"
+      ) {
+        const next =
+          !isVibrateSubtitle;
+
+        setIsVibrateSubtitle(
+          next
+        );
 
         await AsyncStorage.setItem(
           "subtitleVibrate",
@@ -453,85 +679,89 @@ export default function SettingScreen() {
   // 로그아웃
   // =========================================================
 
-  const handleLogoutConfirm = async () => {
-    try {
-      setIsLogoutModalVisible(false);
+  const handleLogoutConfirm =
+    async () => {
+      try {
+        setIsLogoutModalVisible(
+          false
+        );
 
-      /**
-       * ★ QR 인증 정보 유지
-       *
-       * 아래 값은 삭제하지 않는다.
-       *
-       * deviceUid
-       * isVerifiedUser
-       * pairedUserId
-       *
-       * 따라서 같은 사용자로 다시 로그인하면
-       * QR 인증을 다시 하지 않아도 됨.
-       */
+        /**
+         * QR 인증 정보는 유지:
+         *
+         * deviceUid
+         * isVerifiedUser
+         * pairedUserId
+         */
 
-      await AsyncStorage.multiRemove(
-        LOGOUT_STORAGE_KEYS
-      );
+        await AsyncStorage.multiRemove(
+          LOGOUT_STORAGE_KEYS
+        );
 
-      /**
-       * 알림 설정도 유지
-       *
-       * callVibrate
-       * callSound
-       * subtitleVibrate
-       */
+        /**
+         * 알림 설정도 유지:
+         *
+         * callVibrate
+         * callSound
+         * subtitleVibrate
+         */
 
-      console.log("[SETTING] 로그아웃 완료");
+        console.log(
+          "[SETTING] 로그아웃 완료"
+        );
 
-      navigation.reset({
-        index: 0,
-        routes: [
-          {
-            name: "ResidentLogin",
-          },
-        ],
-      });
-    } catch (error) {
-      console.error(
-        "[SETTING] 로그아웃 처리 실패:",
-        error?.message
-      );
+        navigation.reset({
+          index: 0,
 
-      Alert.alert(
-        "로그아웃 실패",
-        "로그아웃 처리 중 오류가 발생했습니다."
-      );
-    }
-  };
+          routes: [
+            {
+              name:
+                "ResidentLogin",
+            },
+          ],
+        });
+      } catch (error) {
+        console.error(
+          "[SETTING] 로그아웃 처리 실패:",
+          error?.message
+        );
+
+        Alert.alert(
+          "로그아웃 실패",
+          "로그아웃 처리 중 오류가 발생했습니다."
+        );
+      }
+    };
 
   // =========================================================
   // 회원탈퇴
   // =========================================================
 
-  const handleDeleteUserConfirm = async () => {
-    try {
-      setIsDeleteUserModalVisible(false);
+  const handleDeleteUserConfirm =
+    async () => {
+      try {
+        setIsDeleteUserModalVisible(
+          false
+        );
 
-      /**
-       * 현재 백엔드에 실제 사용자 계정을 삭제하는
-       * 회원탈퇴 API가 확인되지 않음.
-       *
-       * 따라서 예전처럼 AsyncStorage만 삭제하고
-       * "탈퇴됐다"고 처리하면 안 됨.
-       */
+        /**
+         * 현재 백엔드 회원탈퇴 API 미연결.
+         *
+         * AsyncStorage만 삭제하고
+         * 실제 탈퇴가 된 것처럼 처리하지 않음.
+         */
 
-      Alert.alert(
-        "회원탈퇴 기능 준비 중",
-        "현재 서버에 회원탈퇴 API가 연결되어 있지 않아 계정을 삭제할 수 없습니다.\n\n백엔드 회원탈퇴 API가 추가된 후 연결해 주세요."
-      );
-    } catch (error) {
-      console.error(
-        "[SETTING] 회원탈퇴 처리 실패:",
-        error?.message
-      );
-    }
-  };
+        Alert.alert(
+          "회원탈퇴 기능 준비 중",
+          "현재 서버에 회원탈퇴 API가 연결되어 있지 않아 계정을 삭제할 수 없습니다.\n\n백엔드 회원탈퇴 API가 추가된 후 연결해 주세요."
+        );
+      } catch (error) {
+        console.error(
+          "[SETTING] 회원탈퇴 처리 실패:",
+          error?.message
+        );
+      }
+    };
 
   // =========================================================
   // UI
@@ -553,7 +783,9 @@ export default function SettingScreen() {
       </Header>
 
       <ScrollView
-        showsVerticalScrollIndicator={false}
+        showsVerticalScrollIndicator={
+          false
+        }
       >
         {/* ================= 알림 ================= */}
 
@@ -561,6 +793,8 @@ export default function SettingScreen() {
           <SectionLabel>
             알림
           </SectionLabel>
+
+          {/* 호출 진동 */}
 
           <SettingItem
             activeOpacity={0.7}
@@ -587,6 +821,8 @@ export default function SettingScreen() {
             </CheckBoxContainer>
           </SettingItem>
 
+          {/* 호출 소리 */}
+
           <SettingItem
             activeOpacity={0.7}
             onPress={() =>
@@ -611,6 +847,8 @@ export default function SettingScreen() {
               )}
             </CheckBoxContainer>
           </SettingItem>
+
+          {/* 자막 진동 */}
 
           <SettingItem
             activeOpacity={0.7}
@@ -717,13 +955,16 @@ export default function SettingScreen() {
             }
             style={{
               borderTopWidth: 1,
-              borderTopColor: "#EEE",
+              borderTopColor:
+                "#EEE",
               marginTop: 10,
             }}
           >
             <ActionLeft>
               <ActionIcon
-                source={logoutIcon}
+                source={
+                  logoutIcon
+                }
               />
 
               <ActionText>
@@ -743,12 +984,15 @@ export default function SettingScreen() {
           >
             <ActionLeft>
               <ActionIcon
-                source={deleteUserIcon}
+                source={
+                  deleteUserIcon
+                }
               />
 
               <ActionText
                 style={{
-                  color: "#FF4D4D",
+                  color:
+                    "#FF4D4D",
                 }}
               >
                 회원탈퇴
@@ -807,7 +1051,9 @@ export default function SettingScreen() {
 
       <Modal
         transparent
-        visible={isLogoutModalVisible}
+        visible={
+          isLogoutModalVisible
+        }
         animationType="fade"
         onRequestClose={() =>
           setIsLogoutModalVisible(
@@ -817,7 +1063,9 @@ export default function SettingScreen() {
       >
         <OverlayBackground>
           <OverlayImageCard
-            source={logoutOverlayImg}
+            source={
+              logoutOverlayImg
+            }
             resizeMode="contain"
           >
             <TransparentButtonRow>
@@ -1041,9 +1289,11 @@ const OverlayBackground = styled.View`
 const OverlayImageCard = styled.ImageBackground`
   width: ${SCREEN_WIDTH *
   0.8}px;
+
   height: ${SCREEN_WIDTH *
   0.8 *
   0.52}px;
+
   justify-content: flex-end;
   padding-bottom: 15px;
 `;
