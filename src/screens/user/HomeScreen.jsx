@@ -45,6 +45,8 @@ const ACTIVE_SESSION_STATUSES = new Set([
   "CONNECTED",
 ]);
 
+axios.defaults.timeout = 10000;
+
 const logHome = (message, data) => {
   if (data !== undefined) {
     console.log(`[HOME] ${message}`, data);
@@ -600,7 +602,7 @@ export default function HomeScreen() {
         logHome("화면 이탈 - polling 중지");
       }
     };
-  }, [isFocused]);
+  }, [isFocused, activeSessionId]);
 
   const handleStatusCardPress = async () => {
     logHome("상태 카드 클릭", {

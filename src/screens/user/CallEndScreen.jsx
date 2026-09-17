@@ -1,9 +1,7 @@
-import React from "react";
-import { View, TouchableOpacity } from "react-native";
-import styled from "styled-components/native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation, useRoute } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
+import { useNavigation, useRoute } from "@react-navigation/native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import styled from "styled-components/native";
 
 export default function CallEndScreen() {
   const navigation = useNavigation();
