@@ -1,554 +1,1503 @@
-import {useState,useEffect} from "react";
+import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../../api/config";
 
 export default function useIntercomSession({
- initialSessionId,
- routeToken,
- isMountedRef,
- logUserChat,
- handleAuthExpired,
- moveToIdleMainTab,
- setMessages,
-}){
-
-const [currentSessionId,setCurrentSessionId]=useState(initialSessionId);
-const [token,setToken]=useState(null);
-const [isLoading,setIsLoading]=useState(true);
-const [inputText,setInputText]=useState("");
-const [seconds,setSeconds]=useState(0);
-const [isEnding,setIsEnding]=useState(false);
-
-
-const getSessionId=(session)=>{
- return session?.sessionId??session?.id??null;
-};
-
-
-const normalizeMessage=(message,index=0)=>{
-
-const sender=
- String(
-  message?.senderType||
-  message?.sender||
-  message?.role||
-  ""
- ).toUpperCase();
-
-
-return{
- id:
-  String(
-   message?.messageId||
-   message?.id||
-   `message-${Date.now()}-${index}`
-  ),
-
- messageId:
-  message?.messageId||
-  message?.id||
-  null,
-
- text:
-  String(
-   message?.content||
-   message?.messageText||
-   message?.text||
-   message?.message||
-   ""
-  ),
-
- type:
-  sender==="USER"||
-  sender==="RESIDENT"||
-  sender==="SEND"||
-  sender==="OUTGOING"
-   ?"send"
-   :"receive",
-
- senderType:
-  message?.senderType||
-  sender,
-
- createdAt:
-  message?.createdAt||
-  new Date().toISOString(),
-};
-
-};
-
-
-const normalizeMessages=(list=[])=>{
-
-if(!Array.isArray(list)){
- return[];
-}
-
-return list
-.map((item,index)=>
- normalizeMessage(item,index)
-)
-.filter(item=>
- item.text.trim()
-);
-
-};
-
-
-
-const fetchCurrentSession=async(
- activeToken,
- deviceUid
-)=>{
-
-try{
-
-const response=await axios.get(
- `${BASE_URL}/api/sessions/current`,
- {
-  headers:{
-   Authorization:`Bearer ${activeToken}`
-  },
-  params:{
-   deviceUid
-  }
- }
-);
-
-return response.data?.data||null;
-
-}catch(error){
-
-logUserChat(
- "현재 세션 조회 실패",
- error?.message
-);
-
-return null;
-
-}
-
-};
-
-
-
-const connectCurrentSession=async(
- sessionId,
- activeToken
-)=>{
-
-try{
-
-const response=await axios.post(
- `${BASE_URL}/api/sessions/${sessionId}/connect`,
- {},
- {
-  headers:{
-   Authorization:`Bearer ${activeToken}`
-  }
- }
-);
-
-return response.data?.success!==false;
-
-}catch(error){
-
-logUserChat(
- "세션 연결 실패",
- error?.message
-);
-
-return false;
-
-}
-
-};
-
-
-
-const fetchSessionMessages=async({
- targetSessionId,
- activeToken
-})=>{
-
-try{
-
-const response=await axios.get(
- `${BASE_URL}/api/sessions/${targetSessionId}/messages`,
- {
-  headers:{
-   Authorization:`Bearer ${activeToken}`
-  }
- }
-);
-
-
-if(
- response.data?.success&&
- Array.isArray(response.data.data)
-){
-
-setMessages(
- normalizeMessages(
-  response.data.data
- )
-);
-
-}
-
-
-}catch(error){
-
-logUserChat(
- "메시지 조회 실패",
- error?.message
-);
-
-}
-
-};
-
-
-
-const sendMessage=async()=>{
-
-const text=
- String(inputText||"").trim();
-
-
-if(
- !text||
- !currentSessionId
-){
- return;
-}
-
-
-const activeToken=
- token||
- await AsyncStorage.getItem(
-  "accessToken"
-);
-
-
-if(!activeToken){
- return;
-}
-
-
-try{
-
-await axios.post(
- `${BASE_URL}/api/sessions/${currentSessionId}/messages`,
- {
-  message:text
- },
- {
-  headers:{
-   Authorization:`Bearer ${activeToken}`
-  }
- }
-);
-
-
-setMessages(prev=>{
-
-const exists=
- prev.some(item=>
-  item.type==="send"&&
-  item.text===text
- );
-
-
-if(exists){
- return prev;
-}
-
-
-return[
- ...prev,
- {
-  id:
-   `local-send-${Date.now()}`,
-  messageId:null,
-  text,
-  type:"send",
-  senderType:"USER",
-  createdAt:
-   new Date().toISOString()
- }
-];
-
-});
-
-
-setInputText("");
-
-
-}catch(error){
-
-logUserChat(
- "메시지 전송 실패",
- error?.message
-);
-
-}
-
-};
-
-
-
-const initializeSession=async()=>{
-
-try{
-
-setIsLoading(true);
-
-
-const savedToken=
- await AsyncStorage.getItem(
-  "accessToken"
- );
-
-
-const activeToken=
- savedToken||
- routeToken;
-
-
-setToken(activeToken);
-
-
-if(!activeToken){
-
-await handleAuthExpired();
-
-return;
-
-}
-
-
-if(!initialSessionId){
-
-moveToIdleMainTab({
- screen:"홈"
-});
-
-return;
-
-}
-
-
-
-const deviceUid=
- await AsyncStorage.getItem(
-  "deviceUid"
-);
-
-
-
-const session=
- await fetchCurrentSession(
-  activeToken,
-  deviceUid
-);
-
-
-
-if(
- !session||
- String(
-  getSessionId(session)
- )!==
- String(initialSessionId)
-){
-
-moveToIdleMainTab({
- screen:"히스토리",
- endedSessionId:
-  initialSessionId
-});
-
-return;
-
-}
-
-
-
-setCurrentSessionId(
- initialSessionId
-);
-
-
-
-const connected=
- await connectCurrentSession(
   initialSessionId,
-  activeToken
-);
+  routeToken,
+  isMountedRef,
+  logUserChat,
+  handleAuthExpired,
+  moveToIdleMainTab,
+  setMessages,
+  stopRealtimeSubscription,
+}) {
+
+  const [currentSessionId, setCurrentSessionId] =
+    useState(initialSessionId);
+
+  const [token, setToken] = useState(null);
+
+  const [isLoading, setIsLoading] =
+    useState(true);
+
+  const [inputText, setInputText] =
+    useState("");
+
+  const [seconds, setSeconds] =
+    useState(0);
+
+  const [isEnding, setIsEnding] =
+    useState(false);
 
 
+  // =========================================================
+  // 공통 유틸
+  // =========================================================
 
-if(!connected){
- return;
-}
-
-
-
-await fetchSessionMessages({
- targetSessionId:
-  initialSessionId,
-
- activeToken
-
-});
+  const getSessionId = useCallback((session) => {
+    return (
+      session?.sessionId ??
+      session?.id ??
+      null
+    );
+  }, []);
 
 
-}catch(error){
-
-logUserChat(
- "세션 초기화 실패",
- error?.message
-);
-
-
-}finally{
-
-
-if(isMountedRef.current){
-
-setIsLoading(false);
-
-}
+  const getServerError = useCallback((error) => {
+    return (
+      error?.response?.data?.message ||
+      error?.response?.data?.error ||
+      error?.response?.data?.detail ||
+      error?.message ||
+      "알 수 없는 오류가 발생했습니다."
+    );
+  }, []);
 
 
-}
+  // =========================================================
+  // 메시지 정규화
+  // =========================================================
 
-};
+  const normalizeMessage = useCallback(
+    (message, index = 0) => {
 
-
-
-const endCall=async()=>{
-
-if(
- isEnding||
- !currentSessionId
-){
- return;
-}
-
-
-setIsEnding(true);
+      const sender = String(
+        message?.senderType ||
+        message?.sender ||
+        message?.role ||
+        message?.type ||
+        ""
+      ).toUpperCase();
 
 
-const activeToken=
- token||
- await AsyncStorage.getItem(
-  "accessToken"
-);
+      const text = String(
+        message?.content ||
+        message?.messageText ||
+        message?.text ||
+        message?.message ||
+        message?.rawText ||
+        ""
+      );
 
 
-try{
+      let type = "receive";
 
 
-await axios.post(
- `${BASE_URL}/api/sessions/end`,
- {
-  sessionId:
-   currentSessionId
- },
- {
-  headers:{
-   Authorization:
-    `Bearer ${activeToken}`
-  }
- }
-);
+      if (
+        sender === "USER" ||
+        sender === "RESIDENT" ||
+        sender === "SEND" ||
+        sender === "OUTGOING"
+      ) {
+        type = "send";
+      }
 
 
-
-moveToIdleMainTab({
- screen:"히스토리",
- endedSessionId:
-  currentSessionId
-});
-
-
-
-}catch(error){
-
-logUserChat(
- "통화 종료 실패",
- error?.message
-);
+      if (
+        sender === "SYSTEM" ||
+        sender === "SYSTEM_MESSAGE"
+      ) {
+        type = "system";
+      }
 
 
-}finally{
+      return {
+        id: String(
+          message?.messageId ||
+          message?.id ||
+          `message-${Date.now()}-${index}`
+        ),
 
-setIsEnding(false);
+        messageId:
+          message?.messageId ||
+          message?.id ||
+          null,
 
-}
+        transcriptId:
+          message?.transcriptId ||
+          null,
 
-};
+        text,
 
+        type,
 
+        senderType:
+          message?.senderType ||
+          sender,
 
-useEffect(()=>{
+        messageType:
+          message?.messageType ||
+          null,
 
-const timer=
- setInterval(()=>{
+        originalContent:
+          message?.originalContent ||
+          null,
 
-  setSeconds(prev=>
-   prev+1
+        createdAt:
+          message?.createdAt ||
+          new Date().toISOString(),
+      };
+    },
+    []
   );
 
- },1000);
+
+  const normalizeMessages = useCallback(
+    (list = []) => {
+
+      if (!Array.isArray(list)) {
+        return [];
+      }
 
 
-return()=>{
+      return list
+        .map((item, index) =>
+          normalizeMessage(item, index)
+        )
+        .filter(
+          (item) =>
+            item.text &&
+            item.text.trim()
+        );
+    },
+    [normalizeMessage]
+  );
 
-clearInterval(timer);
 
-};
+  // =========================================================
+  // 로컬 전송 메시지 추가
+  // =========================================================
 
-},[]);
+  const appendLocalSendMessage = useCallback(
+    (text, messageType = "MESSAGE") => {
+
+      const safeText =
+        String(text || "").trim();
 
 
+      if (!safeText) {
+        return;
+      }
 
-return{
 
-currentSessionId,
-setCurrentSessionId,
+      if (!isMountedRef.current) {
+        return;
+      }
 
-token,
-setToken,
 
-isLoading,
-setIsLoading,
+      setMessages((prev) => {
 
-inputText,
-setInputText,
+        const alreadyExists =
+          [...prev]
+            .reverse()
+            .slice(0, 10)
+            .some(
+              (item) =>
+                item.type === "send" &&
+                String(item.text || "").trim() ===
+                  safeText
+            );
 
-seconds,
 
-isEnding,
+        if (alreadyExists) {
+          return prev;
+        }
 
-sendMessage,
 
-endCall,
+        return [
+          ...prev,
 
-fetchCurrentSession,
+          {
+            id:
+              `local-send-${Date.now()}`,
 
-connectCurrentSession,
+            messageId: null,
 
-fetchSessionMessages,
+            transcriptId: null,
 
-initializeSession,
+            text: safeText,
 
-normalizeMessage,
-normalizeMessages
+            type: "send",
 
-};
+            senderType: "USER",
 
+            messageType,
+
+            originalContent: null,
+
+            createdAt:
+              new Date().toISOString(),
+          },
+        ];
+      });
+    },
+    [isMountedRef, setMessages]
+  );
+
+
+  // =========================================================
+  // 현재 세션 조회
+  // =========================================================
+
+  const fetchCurrentSession = useCallback(
+    async (activeToken, deviceUid) => {
+
+      if (!activeToken || !deviceUid) {
+
+        logUserChat(
+          "현재 세션 조회 생략",
+          {
+            hasToken:
+              Boolean(activeToken),
+
+            hasDeviceUid:
+              Boolean(deviceUid),
+          }
+        );
+
+        return null;
+      }
+
+
+      try {
+
+        const response =
+          await axios.get(
+            `${BASE_URL}/api/sessions/current`,
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+              },
+
+              params: {
+                deviceUid,
+              },
+
+              timeout: 10000,
+            }
+          );
+
+
+        const sessionData =
+          response.data?.success !== false
+            ? response.data?.data || null
+            : null;
+
+
+        logUserChat(
+          "현재 세션 확인 응답",
+          {
+            sessionId:
+              getSessionId(sessionData),
+
+            success:
+              response.data?.success,
+
+            data:
+              sessionData,
+          }
+        );
+
+
+        return sessionData;
+
+      } catch (error) {
+
+        const status =
+          error?.response?.status;
+
+        const serverMessage =
+          getServerError(error);
+
+
+        logUserChat(
+          "현재 세션 조회 실패",
+          {
+            status,
+            error: serverMessage,
+          }
+        );
+
+
+        if (
+          (status === 401 ||
+            status === 403) &&
+          handleAuthExpired
+        ) {
+          await handleAuthExpired();
+        }
+
+
+        return null;
+      }
+    },
+    [
+      getSessionId,
+      getServerError,
+      handleAuthExpired,
+      logUserChat,
+    ]
+  );
+
+
+  // =========================================================
+  // 세션 연결
+  // =========================================================
+
+  const connectCurrentSession = useCallback(
+    async (sessionId, activeToken) => {
+
+      if (!sessionId || !activeToken) {
+        return false;
+      }
+
+
+      try {
+
+        const response =
+          await axios.post(
+            `${BASE_URL}/api/sessions/${sessionId}/connect`,
+            {},
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+
+                "Content-Type":
+                  "application/json",
+              },
+
+              timeout: 10000,
+            }
+          );
+
+
+        logUserChat(
+          "통화 연결 응답",
+          {
+            sessionId,
+
+            status:
+              response.status,
+
+            data:
+              response.data,
+          }
+        );
+
+
+        return (
+          response.data?.success !== false
+        );
+
+      } catch (error) {
+
+        const status =
+          error?.response?.status;
+
+        const serverMessage =
+          getServerError(error);
+
+
+        logUserChat(
+          "세션 연결 실패",
+          {
+            sessionId,
+            status,
+            error: serverMessage,
+          }
+        );
+
+
+        if (
+          (status === 401 ||
+            status === 403) &&
+          handleAuthExpired
+        ) {
+          await handleAuthExpired();
+        }
+
+
+        if (
+          status === 404 ||
+          status === 409 ||
+          status === 410
+        ) {
+          return false;
+        }
+
+
+        return true;
+      }
+    },
+    [
+      getServerError,
+      handleAuthExpired,
+      logUserChat,
+    ]
+  );
+
+
+  // =========================================================
+  // 세션 메시지 조회
+  // =========================================================
+
+  const fetchSessionMessages = useCallback(
+    async ({
+      targetSessionId,
+      activeToken,
+    }) => {
+
+      if (
+        !targetSessionId ||
+        !activeToken
+      ) {
+
+        logUserChat(
+          "메시지 조회 생략",
+          {
+            hasSessionId:
+              Boolean(targetSessionId),
+
+            hasToken:
+              Boolean(activeToken),
+          }
+        );
+
+        return;
+      }
+
+
+      try {
+
+        const response =
+          await axios.get(
+            `${BASE_URL}/api/sessions/${targetSessionId}/messages`,
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+              },
+
+              timeout: 10000,
+            }
+          );
+
+
+        if (
+          response.data?.success &&
+          Array.isArray(
+            response.data?.data
+          )
+        ) {
+
+          const normalized =
+            normalizeMessages(
+              response.data.data
+            );
+
+
+          if (isMountedRef.current) {
+            setMessages(normalized);
+          }
+
+
+          logUserChat(
+            "세션 메시지 조회 완료",
+            {
+              sessionId:
+                targetSessionId,
+
+              count:
+                normalized.length,
+            }
+          );
+
+
+          return normalized;
+        }
+
+
+        logUserChat(
+          "메시지 조회 응답 확인 필요",
+          response.data
+        );
+
+
+        return [];
+
+      } catch (error) {
+
+        const status =
+          error?.response?.status;
+
+        const serverMessage =
+          getServerError(error);
+
+
+        logUserChat(
+          "메시지 조회 실패",
+          {
+            sessionId:
+              targetSessionId,
+
+            status,
+
+            error:
+              serverMessage,
+          }
+        );
+
+
+        if (
+          (status === 401 ||
+            status === 403) &&
+          handleAuthExpired
+        ) {
+          await handleAuthExpired();
+        }
+
+
+        return [];
+      }
+    },
+    [
+      getServerError,
+      handleAuthExpired,
+      isMountedRef,
+      logUserChat,
+      normalizeMessages,
+      setMessages,
+    ]
+  );
+
+
+  // =========================================================
+  // 빠른 응답 전송
+  // =========================================================
+
+  const sendQuickReply = useCallback(
+    async ({
+      replyCode,
+      text,
+    }) => {
+
+      if (isEnding) {
+        return false;
+      }
+
+
+      const targetSessionId =
+        currentSessionId;
+
+
+      if (!targetSessionId) {
+
+        logUserChat(
+          "빠른 응답 전송 실패",
+          {
+            error:
+              "현재 연결된 세션이 없습니다.",
+          }
+        );
+
+        return false;
+      }
+
+
+      const activeToken =
+        token ||
+        (
+          await AsyncStorage.getItem(
+            "accessToken"
+          )
+        );
+
+
+      if (!activeToken) {
+
+        if (handleAuthExpired) {
+          await handleAuthExpired();
+        }
+
+        return false;
+      }
+
+
+      if (
+        replyCode === undefined ||
+        replyCode === null ||
+        replyCode === ""
+      ) {
+
+        logUserChat(
+          "빠른 응답 전송 실패",
+          {
+            sessionId:
+              targetSessionId,
+
+            error:
+              "replyCode가 없습니다.",
+          }
+        );
+
+        return false;
+      }
+
+
+      const messageText =
+        String(text || "").trim();
+
+
+      try {
+
+        logUserChat(
+          "빠른 응답 전송 요청",
+          {
+            sessionId:
+              targetSessionId,
+
+            replyCode,
+
+            text:
+              messageText,
+          }
+        );
+
+
+        const response =
+          await axios.post(
+            `${BASE_URL}/api/sessions/${targetSessionId}/reply`,
+            {
+              replyCode,
+            },
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+
+                "Content-Type":
+                  "application/json",
+              },
+
+              timeout: 10000,
+            }
+          );
+
+
+        logUserChat(
+          "빠른 응답 전송 완료",
+          {
+            sessionId:
+              targetSessionId,
+
+            status:
+              response.status,
+
+            response:
+              response.data,
+          }
+        );
+
+
+        if (messageText) {
+
+          appendLocalSendMessage(
+            messageText,
+            "QUICK_REPLY"
+          );
+
+        }
+
+
+        return true;
+
+      } catch (error) {
+
+        const status =
+          error?.response?.status;
+
+        const serverMessage =
+          getServerError(error);
+
+
+        logUserChat(
+          "빠른 응답 전송 실패",
+          {
+            sessionId:
+              targetSessionId,
+
+            replyCode,
+
+            status,
+
+            error:
+              serverMessage,
+          }
+        );
+
+
+        if (
+          (status === 401 ||
+            status === 403) &&
+          handleAuthExpired
+        ) {
+
+          await handleAuthExpired();
+
+          return false;
+        }
+
+
+        if (
+          status === 400 &&
+          String(
+            serverMessage
+          ).includes("권한")
+        ) {
+          return false;
+        }
+
+
+        if (
+          status === 404 ||
+          status === 409 ||
+          status === 410
+        ) {
+
+          if (stopRealtimeSubscription) {
+
+            try {
+
+              stopRealtimeSubscription();
+
+            } catch (stopError) {
+
+              logUserChat(
+                "실시간 구독 종료 실패",
+                stopError?.message
+              );
+
+            }
+          }
+
+
+          moveToIdleMainTab({
+            screen:
+              "히스토리",
+
+            endedSessionId:
+              targetSessionId,
+          });
+
+
+          return false;
+        }
+
+
+        return false;
+      }
+    },
+    [
+      appendLocalSendMessage,
+      currentSessionId,
+      getServerError,
+      handleAuthExpired,
+      isEnding,
+      logUserChat,
+      moveToIdleMainTab,
+      stopRealtimeSubscription,
+      token,
+    ]
+  );
+
+
+  // =========================================================
+  // 일반 텍스트 메시지 전송
+  //
+  // 사용자가 입력한 어떤 텍스트든 전송 가능
+  //
+  // POST
+  // /api/sessions/{sessionId}/messages
+  //
+  // {
+  //   message: "사용자가 입력한 내용"
+  // }
+  // =========================================================
+
+  const sendMessage = useCallback(
+    async () => {
+
+      const text =
+        String(inputText || "").trim();
+
+
+      if (!text) {
+        return false;
+      }
+
+
+      if (isEnding) {
+        return false;
+      }
+
+
+      const targetSessionId =
+        currentSessionId;
+
+
+      if (!targetSessionId) {
+
+        logUserChat(
+          "일반 메시지 전송 실패",
+          {
+            error:
+              "현재 연결된 세션이 없습니다.",
+          }
+        );
+
+        return false;
+      }
+
+
+      const activeToken =
+        token ||
+        (
+          await AsyncStorage.getItem(
+            "accessToken"
+          )
+        );
+
+
+      if (!activeToken) {
+
+        if (handleAuthExpired) {
+          await handleAuthExpired();
+        }
+
+        return false;
+      }
+
+
+      try {
+
+        logUserChat(
+          "일반 메시지 전송 요청",
+          {
+            sessionId:
+              targetSessionId,
+
+            text,
+          }
+        );
+
+
+        const response =
+          await axios.post(
+            `${BASE_URL}/api/sessions/${targetSessionId}/messages`,
+            {
+              message: text,
+            },
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+
+                "Content-Type":
+                  "application/json",
+              },
+
+              timeout: 10000,
+            }
+          );
+
+
+        logUserChat(
+          "일반 메시지 전송 완료",
+          {
+            sessionId:
+              targetSessionId,
+
+            status:
+              response.status,
+
+            response:
+              response.data,
+          }
+        );
+
+
+        /*
+         * 서버 전송 성공 후에만
+         * 내 말풍선을 즉시 표시한다.
+         *
+         * WebSocket에서도 같은 메시지가
+         * 들어올 수 있으므로 기존
+         * appendLocalSendMessage의
+         * 중복 방지 로직을 그대로 사용한다.
+         */
+        if (isMountedRef.current) {
+
+          appendLocalSendMessage(
+            text,
+            "MESSAGE"
+          );
+
+        }
+
+
+        /*
+         * 전송 성공 후 입력창 초기화
+         */
+        if (isMountedRef.current) {
+          setInputText("");
+        }
+
+
+        return true;
+
+      } catch (error) {
+
+        const status =
+          error?.response?.status;
+
+        const serverMessage =
+          getServerError(error);
+
+
+        logUserChat(
+          "일반 메시지 전송 실패",
+          {
+            sessionId:
+              targetSessionId,
+
+            status,
+
+            error:
+              serverMessage,
+
+            response:
+              error?.response?.data,
+          }
+        );
+
+
+        if (
+          (status === 401 ||
+            status === 403) &&
+          handleAuthExpired
+        ) {
+
+          await handleAuthExpired();
+
+          return false;
+        }
+
+
+        /*
+         * 세션이 이미 종료된 경우
+         */
+        if (
+          status === 404 ||
+          status === 409 ||
+          status === 410
+        ) {
+
+          if (stopRealtimeSubscription) {
+
+            try {
+
+              stopRealtimeSubscription();
+
+            } catch (stopError) {
+
+              logUserChat(
+                "실시간 구독 종료 실패",
+                stopError?.message
+              );
+
+            }
+          }
+
+
+          moveToIdleMainTab({
+            screen:
+              "히스토리",
+
+            endedSessionId:
+              targetSessionId,
+          });
+
+
+          return false;
+        }
+
+
+        return false;
+      }
+    },
+    [
+      appendLocalSendMessage,
+      currentSessionId,
+      getServerError,
+      handleAuthExpired,
+      inputText,
+      isEnding,
+      isMountedRef,
+      logUserChat,
+      moveToIdleMainTab,
+      setInputText,
+      stopRealtimeSubscription,
+      token,
+    ]
+  );
+
+
+  // =========================================================
+  // 세션 초기화
+  // =========================================================
+
+  const initializeSession =
+    useCallback(async () => {
+
+      try {
+
+        setIsLoading(true);
+
+
+        const savedToken =
+          await AsyncStorage.getItem(
+            "accessToken"
+          );
+
+
+        const activeToken =
+          savedToken ||
+          routeToken ||
+          null;
+
+
+        setToken(activeToken);
+
+
+        if (!activeToken) {
+
+          if (handleAuthExpired) {
+            await handleAuthExpired();
+          }
+
+          return;
+        }
+
+
+        if (!initialSessionId) {
+
+          moveToIdleMainTab({
+            screen: "홈",
+          });
+
+          return;
+        }
+
+
+        const deviceUid =
+          await AsyncStorage.getItem(
+            "deviceUid"
+          );
+
+
+        const session =
+          await fetchCurrentSession(
+            activeToken,
+            deviceUid
+          );
+
+
+        const serverSessionId =
+          getSessionId(session);
+
+
+        if (
+          !session ||
+          String(serverSessionId) !==
+            String(initialSessionId)
+        ) {
+
+          logUserChat(
+            "현재 세션 불일치",
+            {
+              requestedSessionId:
+                initialSessionId,
+
+              serverSessionId,
+            }
+          );
+
+
+          moveToIdleMainTab({
+            screen:
+              "히스토리",
+
+            endedSessionId:
+              initialSessionId,
+          });
+
+          return;
+        }
+
+
+        setCurrentSessionId(
+          initialSessionId
+        );
+
+
+        const connected =
+          await connectCurrentSession(
+            initialSessionId,
+            activeToken
+          );
+
+
+        if (!connected) {
+
+          logUserChat(
+            "세션 연결 실패로 초기화 중단",
+            {
+              sessionId:
+                initialSessionId,
+            }
+          );
+
+          return;
+        }
+
+
+        await fetchSessionMessages({
+          targetSessionId:
+            initialSessionId,
+
+          activeToken,
+        });
+
+      } catch (error) {
+
+        logUserChat(
+          "세션 초기화 실패",
+          {
+            error:
+              getServerError(error),
+          }
+        );
+
+      } finally {
+
+        if (isMountedRef.current) {
+          setIsLoading(false);
+        }
+
+      }
+
+    }, [
+      connectCurrentSession,
+      fetchCurrentSession,
+      fetchSessionMessages,
+      getServerError,
+      getSessionId,
+      handleAuthExpired,
+      initialSessionId,
+      isMountedRef,
+      logUserChat,
+      moveToIdleMainTab,
+      routeToken,
+    ]);
+
+
+  // =========================================================
+  // 통화 종료
+  // =========================================================
+
+  const endCall = useCallback(
+    async () => {
+
+      if (
+        isEnding ||
+        !currentSessionId
+      ) {
+
+        logUserChat(
+          "통화 종료 요청 무시",
+          {
+            isEnding,
+
+            sessionId:
+              currentSessionId,
+          }
+        );
+
+        return false;
+      }
+
+
+      setIsEnding(true);
+
+
+      if (stopRealtimeSubscription) {
+
+        try {
+
+          stopRealtimeSubscription();
+
+        } catch (error) {
+
+          logUserChat(
+            "실시간 구독 종료 실패",
+            error?.message
+          );
+
+        }
+      }
+
+
+      const activeToken =
+        token ||
+        (
+          await AsyncStorage.getItem(
+            "accessToken"
+          )
+        );
+
+
+      if (!activeToken) {
+
+        setIsEnding(false);
+
+        if (handleAuthExpired) {
+          await handleAuthExpired();
+        }
+
+        return false;
+      }
+
+
+      const activeSessionId =
+        currentSessionId;
+
+
+      let isEndSuccess = false;
+
+
+      try {
+
+        logUserChat(
+          "세션 종료 요청",
+          {
+            sessionId:
+              activeSessionId,
+
+            hasToken:
+              Boolean(activeToken),
+          }
+        );
+
+
+        const response =
+          await axios.post(
+            `${BASE_URL}/api/sessions/end`,
+            {
+              sessionId:
+                activeSessionId,
+            },
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${activeToken}`,
+
+                "Content-Type":
+                  "application/json",
+              },
+
+              timeout: 10000,
+            }
+          );
+
+
+        isEndSuccess =
+          response.data?.success !== false;
+
+
+        logUserChat(
+          "세션 종료 응답",
+          {
+            sessionId:
+              activeSessionId,
+
+            status:
+              response.status,
+
+            data:
+              response.data,
+
+            success:
+              response.data?.success,
+
+            endedAt:
+              response.data?.data
+                ?.endedAt ||
+              null,
+          }
+        );
+
+
+        if (isEndSuccess) {
+
+          moveToIdleMainTab({
+            screen:
+              "히스토리",
+
+            endedSessionId:
+              activeSessionId,
+          });
+
+        }
+
+
+        return isEndSuccess;
+
+      } catch (error) {
+
+        const status =
+          error?.response?.status;
+
+        const serverMessage =
+          getServerError(error);
+
+
+        logUserChat(
+          "세션 종료 실패",
+          {
+            sessionId:
+              activeSessionId,
+
+            status,
+
+            error:
+              serverMessage,
+          }
+        );
+
+
+        if (
+          (status === 401 ||
+            status === 403) &&
+          handleAuthExpired
+        ) {
+
+          await handleAuthExpired();
+
+          return false;
+        }
+
+
+        return false;
+
+      } finally {
+
+        if (
+          !isEndSuccess &&
+          isMountedRef.current
+        ) {
+          setIsEnding(false);
+        }
+
+      }
+
+    },
+    [
+      currentSessionId,
+      getServerError,
+      handleAuthExpired,
+      isEnding,
+      isMountedRef,
+      logUserChat,
+      moveToIdleMainTab,
+      stopRealtimeSubscription,
+      token,
+    ]
+  );
+
+
+  // =========================================================
+  // 통화 시간
+  // =========================================================
+
+  useEffect(() => {
+
+    const timer =
+      setInterval(() => {
+
+        setSeconds(
+          (prev) => prev + 1
+        );
+
+      }, 1000);
+
+
+    return () => {
+      clearInterval(timer);
+    };
+
+  }, []);
+
+
+  // =========================================================
+  // Return
+  // =========================================================
+
+  return {
+
+    currentSessionId,
+    setCurrentSessionId,
+
+    token,
+    setToken,
+
+    isLoading,
+    setIsLoading,
+
+    inputText,
+    setInputText,
+
+    seconds,
+
+    isEnding,
+
+    /*
+     * 일반 텍스트 전송
+     */
+    sendMessage,
+
+    /*
+     * 추천문구 빠른 응답
+     */
+    sendQuickReply,
+
+    endCall,
+
+    fetchCurrentSession,
+
+    connectCurrentSession,
+
+    fetchSessionMessages,
+
+    initializeSession,
+
+    normalizeMessage,
+
+    normalizeMessages,
+
+    appendLocalSendMessage,
+  };
 }

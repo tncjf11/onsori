@@ -16,7 +16,6 @@ const visibleMessages=useMemo(
  [messages]
 );
 
-
 const scrollToBottom=()=>{
  setTimeout(()=>{
   scrollViewRef?.current?.scrollToEnd({
@@ -25,108 +24,103 @@ const scrollToBottom=()=>{
  },50);
 };
 
-
 useEffect(()=>{
  scrollToBottom();
 },[
  visibleMessages.length,
- realtimePartial,
+ realtimePartial
 ]);
-
 
 return(
 <ChatArea>
 
-{
-isLoading?
-
+{isLoading?(
 <LoadingContainer>
 <ActivityIndicator
  size="large"
  color="#06F393"
 />
 </LoadingContainer>
-
-:
-
+):(
 <ScrollView
  ref={scrollViewRef}
  showsVerticalScrollIndicator={false}
  keyboardShouldPersistTaps="handled"
+ contentContainerStyle={{
+  paddingTop:4,
+  paddingBottom:20,
+  flexGrow:1,
+ }}
  onContentSizeChange={scrollToBottom}
 >
 
-{
-visibleMessages.map((msg,index)=>{
+{visibleMessages.map((msg,index)=>{
 
-if(!String(msg.text||"").trim()){
+const text=
+String(msg.text||"").trim();
+
+if(!text){
  return null;
 }
 
-return msg.type==="receive"
+if(msg.type==="receive"){
 
-?
-
-<ReceiveBubble
+return(
+<ReceiveRow
  key={
   msg.id||
   `receive-${index}`
  }
 >
-<BubbleTextContainer>
+<ReceiveBubble>
 <ReceiveBubbleText>
-{msg.text}
+{text}
 </ReceiveBubbleText>
-</BubbleTextContainer>
 </ReceiveBubble>
+</ReceiveRow>
+);
 
-:
+}
 
-<SendBubble
+return(
+<SendRow
  key={
   msg.id||
   `send-${index}`
  }
 >
+<SendBubble>
 <SendBubbleText>
-{msg.text}
+{text}
 </SendBubbleText>
 </SendBubble>
+</SendRow>
+);
 
-})
-}
+})}
 
-
-{
-String(realtimePartial||"").trim()&&
-
-<ReceiveBubble key="realtime-partial">
-
-<BubbleTextContainer>
-
+{String(realtimePartial||"").trim()?(
+<ReceiveRow key="realtime-partial">
+<ReceiveBubble>
 <ReceiveBubbleText>
-{realtimePartial}
+{String(realtimePartial).trim()}
 </ReceiveBubbleText>
-
-</BubbleTextContainer>
-
 </ReceiveBubble>
-}
-
+</ReceiveRow>
+):null}
 
 </ScrollView>
-
-}
+)}
 
 </ChatArea>
 );
-
 }
-
 
 const ChatArea=styled.View`
 flex:1;
-padding:18px 16px;
+min-height:0;
+padding:10px 16px 0;
+background-color:#f3f4f6;
 `;
 
 const LoadingContainer=styled.View`
@@ -135,41 +129,50 @@ justify-content:center;
 align-items:center;
 `;
 
-const ReceiveBubble=styled.View`
+const ReceiveRow=styled.View`
 width:100%;
-margin-bottom:14px;
+align-items:flex-start;
+margin-bottom:10px;
 `;
 
-const BubbleTextContainer=styled.View`
+const ReceiveBubble=styled.View`
+align-self:flex-start;
 max-width:78%;
 background-color:#ffffff;
-border-radius:20px;
-padding:14px 16px;
-shadow-color:#000;
-shadow-opacity:0.04;
-shadow-radius:5px;
-elevation:2;
+border-radius:18px;
+padding:11px 14px;
+shadow-color:#000000;
+shadow-opacity:0.035;
+shadow-radius:4px;
+shadow-offset:0px 1px;
+elevation:1;
 `;
 
 const ReceiveBubbleText=styled.Text`
 font-size:15px;
 line-height:22px;
 color:#222222;
+flex-shrink:1;
+`;
+
+const SendRow=styled.View`
+width:100%;
+align-items:flex-end;
+margin-bottom:10px;
 `;
 
 const SendBubble=styled.View`
-width:100%;
-align-items:flex-end;
-margin-bottom:14px;
+align-self:flex-end;
+max-width:78%;
+background-color:#06f393;
+border-radius:18px;
+padding:11px 14px;
 `;
 
 const SendBubbleText=styled.Text`
-max-width:78%;
-background-color:#06f393;
-color:#ffffff;
-padding:14px 16px;
-border-radius:20px;
 font-size:15px;
 line-height:22px;
+color:#ffffff;
 font-weight:700;
+flex-shrink:1;
 `;

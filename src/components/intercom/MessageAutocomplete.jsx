@@ -5,20 +5,36 @@ export default function MessageAutocomplete({
  onSelect,
 }){
 
-const getText=(item)=>{
- return String(
-  item?.text||
-  item?.message||
-  item?.content||
-  item||
-  ""
- ).trim();
-};
-
 const suggestions=
  items
- .map(getText)
- .filter(Boolean)
+ .map(item=>{
+
+  if(typeof item==="string"){
+   return{
+    replyCode:null,
+    text:item,
+    score:0
+   };
+  }
+
+  return{
+   ...item,
+   replyCode:
+    item?.replyCode??null,
+   text:String(
+    item?.text||
+    item?.message||
+    item?.content||
+    ""
+   ).trim(),
+   score:
+    Number(item?.score)||0
+  };
+
+ })
+ .filter(item=>
+  item.text.length>0
+ )
  .slice(0,5);
 
 if(!suggestions.length){
@@ -27,26 +43,32 @@ if(!suggestions.length){
 
 return(
 <Container>
+
 {
- suggestions.map((text,index)=>(
-  <Suggestion
-   key={`auto-${index}`}
-   onPress={()=>{
-    onSelect?.(text);
-   }}
-   activeOpacity={0.7}
-  >
-   <SuggestionText>
-    {text}
-   </SuggestionText>
-  </Suggestion>
- ))
+suggestions.map((item,index)=>(
+<Suggestion
+ key={
+  item.replyCode!=null
+   ?`auto-${item.replyCode}`
+   :`auto-${index}`
+ }
+ onPress={()=>{
+  onSelect?.(item);
+ }}
+ activeOpacity={0.7}
+>
+
+<SuggestionText>
+{item.text}
+</SuggestionText>
+
+</Suggestion>
+))
 }
+
 </Container>
 );
-
 }
-
 
 const Container=styled.View`
 padding:8px 16px;
