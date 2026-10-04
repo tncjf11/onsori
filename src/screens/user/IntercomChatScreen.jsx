@@ -1,3 +1,4 @@
+import {useNavigation,useRoute} from "@react-navigation/native";
 import {useEffect,useRef,useState} from "react";
 import {
  Keyboard,
@@ -5,18 +6,26 @@ import {
  Platform,
  View
 } from "react-native";
-import {useRoute,useNavigation} from "@react-navigation/native";
 
+import ChatInput from "../../components/intercom/ChatInput";
+import ChatMessageList from "../../components/intercom/ChatMessageList";
+import EndCallModal from "../../components/intercom/EndCallModal";
 import IntercomHeader from "../../components/intercom/IntercomHeader";
 import IntercomTimer from "../../components/intercom/IntercomTimer";
-import ChatMessageList from "../../components/intercom/ChatMessageList";
-import ChatInput from "../../components/intercom/ChatInput";
 import MessageAutocomplete from "../../components/intercom/MessageAutocomplete";
-import EndCallModal from "../../components/intercom/EndCallModal";
 
-import useIntercomSession from "../../hooks/intercom/useIntercomSession";
 import useIntercomRealtime from "../../hooks/intercom/useIntercomRealtime";
+import useIntercomSession from "../../hooks/intercom/useIntercomSession";
 import useMessageAutocomplete from "../../hooks/intercom/useMessageAutocomplete";
+
+
+const BOTTOM_NAV_HEIGHT=80;
+
+/*
+ * 키보드 상단 툴바와 겹치지 않도록
+ * 입력창을 조금 더 위로 올리는 여유값
+ */
+const KEYBOARD_EXTRA_OFFSET=50;
 
 
 export default function IntercomChatScreen(){
@@ -30,6 +39,14 @@ const isMountedRef=useRef(true);
 const [messages,setMessages]=useState([]);
 const [realtimePartial,setRealtimePartial]=useState("");
 const [isEndModalVisible,setIsEndModalVisible]=useState(false);
+
+/*
+ * 키보드 실제 높이
+ */
+const [keyboardHeight,setKeyboardHeight]=useState(0);
+
+const isKeyboardVisible=
+ keyboardHeight>0;
 
 
 const logUserChat=(message,data)=>{
@@ -90,17 +107,8 @@ const {
  token,
  inputText,
  setInputText,
-
- /*
-  * 일반 텍스트 메시지
-  */
  sendMessage,
-
- /*
-  * 추천문구 빠른 응답
-  */
  sendQuickReply,
-
  endCall,
  isLoading,
  seconds,
@@ -180,11 +188,7 @@ useEffect(()=>{
 
 
 /*
- * 키보드가 올라오거나 내려갈 때
- * 최신 메시지가 보이도록 스크롤
- *
- * 입력창 자체의 위치는
- * KeyboardAvoidingView가 담당한다.
+ * 키보드 높이 감지
  */
 useEffect(()=>{
 
@@ -202,7 +206,12 @@ useEffect(()=>{
  const showSubscription=
   Keyboard.addListener(
    showEvent,
-   ()=>{
+   event=>{
+
+    const height=
+     event?.endCoordinates?.height||0;
+
+    setKeyboardHeight(height);
 
     setTimeout(()=>{
 
@@ -221,13 +230,15 @@ useEffect(()=>{
    hideEvent,
    ()=>{
 
+    setKeyboardHeight(0);
+
     setTimeout(()=>{
 
      scrollViewRef.current?.scrollToEnd({
       animated:true
      });
 
-    },100);
+    },150);
 
    }
   );
@@ -277,15 +288,11 @@ const handleFocus=()=>{
 
 /*
  * 일반 메시지 전송
- *
- * 입력한 문장을 그대로
- * sendMessage()로 전송한다.
  */
 const handleSend=async()=>{
 
  const text=
   String(inputText||"").trim();
-
 
  if(
   !text||
@@ -295,9 +302,6 @@ const handleSend=async()=>{
  }
 
 
- /*
-  * 추천문구가 떠 있다면 닫는다.
-  */
  clearAutocomplete();
 
 
@@ -310,13 +314,26 @@ const handleSend=async()=>{
  );
 
 
- const success=
-  await sendMessage();
+ try{
+
+  const success=
+   await sendMessage();
 
 
- if(success){
+  if(success){
 
-  scrollToBottom();
+   scrollToBottom();
+
+  }
+
+ }catch(error){
+
+  logUserChat(
+   "일반 텍스트 전송 처리 실패",
+   {
+    error:error?.message
+   }
+  );
 
  }
 
@@ -349,9 +366,6 @@ const handleAutocompleteSelect=async(item)=>{
   ).trim();
 
 
- /*
-  * 추천문구에는 replyCode가 필요하다.
-  */
  if(
   replyCode===undefined||
   replyCode===null||
@@ -372,27 +386,36 @@ const handleAutocompleteSelect=async(item)=>{
  }
 
 
- /*
-  * 추천 목록 닫기
-  */
  clearAutocomplete();
 
 
- /*
-  * 추천문구 전송
-  */
- const success=
-  await sendQuickReply({
-   replyCode,
-   text
-  });
+ try{
+
+  const success=
+   await sendQuickReply({
+    replyCode,
+    text
+   });
 
 
- if(success){
+  if(success){
 
-  setInputText("");
+   setInputText("");
 
-  scrollToBottom();
+   scrollToBottom();
+
+  }
+
+ }catch(error){
+
+  logUserChat(
+   "추천문구 전송 처리 실패",
+   {
+    replyCode,
+    text,
+    error:error?.message
+   }
+  );
 
  }
 
@@ -400,7 +423,7 @@ const handleAutocompleteSelect=async(item)=>{
 
 
 /*
- * 종료 모달 열기
+ * 통화 종료 모달
  */
 const handleOpenEndModal=()=>{
 
@@ -413,9 +436,6 @@ const handleOpenEndModal=()=>{
 };
 
 
-/*
- * 통화 종료 확인
- */
 const handleConfirmEnd=()=>{
 
  if(isEnding){
@@ -429,9 +449,6 @@ const handleConfirmEnd=()=>{
 };
 
 
-/*
- * 종료 취소
- */
 const handleCancelEnd=()=>{
 
  if(isEnding){
@@ -443,6 +460,34 @@ const handleCancelEnd=()=>{
 };
 
 
+/*
+ * 입력창 위치
+ *
+ * 키보드 없음:
+ * → 하단 네비 바로 위
+ *
+ * 키보드 있음:
+ * → 키보드 위 + 추가 여백 40px
+ */
+const inputBottom=
+ isKeyboardVisible
+  ?keyboardHeight+KEYBOARD_EXTRA_OFFSET
+  :BOTTOM_NAV_HEIGHT;
+
+
+/*
+ * Android에서는 직접 keyboardHeight로
+ * 입력창 위치를 조절한다.
+ *
+ * iOS에서는 KeyboardAvoidingView의
+ * padding을 사용한다.
+ */
+const keyboardBehavior=
+ Platform.OS==="ios"
+  ?"padding"
+  :undefined;
+
+
 return(
 
 <KeyboardAvoidingView
@@ -450,11 +495,7 @@ return(
   flex:1,
   backgroundColor:"#f3f4f6"
  }}
- behavior={
-  Platform.OS==="ios"
-   ?"padding"
-   :"height"
- }
+ behavior={keyboardBehavior}
  keyboardVerticalOffset={0}
 >
 
@@ -480,20 +521,6 @@ return(
 >
 
 
-{/*
- * 채팅 영역
- *
- * 입력창이 absolute가 아니므로
- * 입력창과 채팅 영역 사이에
- * 이상한 빈 공간이 생기지 않는다.
- */}
-<View
- style={{
-  flex:1,
-  minHeight:0
- }}
->
-
 <ChatMessageList
  isLoading={isLoading}
  messages={messages}
@@ -505,23 +532,34 @@ return(
 }
 />
 
-</View>
-
 
 {/*
- * 하단 입력 영역
+ * 입력창 + 추천문구
  *
- * 일반 메시지 + 추천문구 모두 여기에서 처리한다.
+ * 키보드가 없으면:
+ * bottom = 80
  *
- * 화면 하단에 자연스럽게 붙고,
- * 키보드가 올라오면 KeyboardAvoidingView가
- * 전체 영역을 함께 올린다.
+ * 키보드가 올라오면:
+ * bottom = 키보드 높이 + 40
  */}
+<View
+ pointerEvents="box-none"
+ style={{
+  position:"absolute",
+  left:0,
+  right:0,
+  bottom:inputBottom,
+  zIndex:100,
+  elevation:100
+ }}
+>
+
+
 <View
  style={{
   width:"100%",
-  flexShrink:0,
   backgroundColor:"#ffffff",
+
   borderTopLeftRadius:28,
   borderTopRightRadius:28,
 
@@ -564,6 +602,9 @@ return(
 
  disabled={isEnding}
 />
+
+
+</View>
 
 
 </View>

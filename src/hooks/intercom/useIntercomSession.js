@@ -897,9 +897,9 @@ export default function useIntercomSession({
 
         const response =
           await axios.post(
-            `${BASE_URL}/api/sessions/${targetSessionId}/messages`,
+            `${BASE_URL}/api/sessions/${targetSessionId}/tts`,
             {
-              message: text,
+              text: text,
             },
             {
               headers: {

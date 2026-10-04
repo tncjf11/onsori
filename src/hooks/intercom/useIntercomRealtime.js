@@ -1,516 +1,700 @@
-import {useRef} from "react";
-import {Vibration} from "react-native";
+import { useRef } from "react";
+import { Vibration } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import {subscribeSessionTopics} from "../../services/realtimeSocket";
+import { subscribeSessionTopics } from "../../services/realtimeSocket";
+
 
 export default function useIntercomRealtime({
- isMountedRef,
- logUserChat,
- moveToIdleMainTab,
-}){
+  isMountedRef,
+  logUserChat,
+  moveToIdleMainTab,
+}) {
 
-const unsubscribeRef=useRef(null);
-const partialRef=useRef("");
-const utteranceSeqRef=useRef(0);
-const remoteEndHandledRef=useRef(false);
+  const unsubscribeRef = useRef(null);
+  const partialRef = useRef("");
+  const utteranceSeqRef = useRef(0);
+  const remoteEndHandledRef = useRef(false);
 
 
-const normalizeMessage=(message)=>{
+  // =========================================================
+  // 메시지 정규화
+  // =========================================================
 
-const sender=
- String(
-  message?.senderType||
-  message?.sender||
-  message?.role||
-  ""
- ).toUpperCase();
+  const normalizeMessage = (message) => {
 
-return{
- id:
-  String(
-   message?.messageId||
-   message?.id||
-   `realtime-${Date.now()}`
-  ),
+    const sender =
+      String(
+        message?.senderType ||
+        message?.sender ||
+        message?.role ||
+        ""
+      ).toUpperCase();
 
- messageId:
-  message?.messageId||
-  message?.id||
-  null,
 
- text:
-  String(
-   message?.content||
-   message?.messageText||
-   message?.text||
-   message?.message||
-   ""
-  ),
+    return {
+      id:
+        String(
+          message?.messageId ||
+          message?.id ||
+          `realtime-${Date.now()}`
+        ),
 
- type:
-  sender==="USER"||
-  sender==="RESIDENT"||
-  sender==="SEND"||
-  sender==="OUTGOING"
-   ?"send"
-   :"receive",
+      messageId:
+        message?.messageId ||
+        message?.id ||
+        null,
 
- senderType:
-  message?.senderType||
-  sender,
+      transcriptId:
+        message?.transcriptId ||
+        null,
 
- createdAt:
-  message?.createdAt||
-  new Date().toISOString()
-};
+      text:
+        String(
+          message?.content ||
+          message?.messageText ||
+          message?.text ||
+          message?.message ||
+          ""
+        ),
 
-};
+      type:
+        sender === "USER" ||
+        sender === "RESIDENT" ||
+        sender === "SEND" ||
+        sender === "OUTGOING"
+          ? "send"
+          : "receive",
 
+      senderType:
+        message?.senderType ||
+        sender,
 
+      messageType:
+        message?.messageType ||
+        null,
 
-const stopRealtimeSubscription=()=>{
+      originalContent:
+        message?.originalContent ||
+        null,
 
-if(unsubscribeRef.current){
+      createdAt:
+        message?.createdAt ||
+        new Date().toISOString(),
+    };
+  };
 
-try{
 
-unsubscribeRef.current();
+  // =========================================================
+  // 실시간 구독 종료
+  // =========================================================
 
-}catch(error){
+  const stopRealtimeSubscription = () => {
 
-logUserChat(
- "실시간 구독 해제 실패",
- error?.message
-);
+    if (unsubscribeRef.current) {
 
-}
+      try {
 
-unsubscribeRef.current=null;
+        unsubscribeRef.current();
 
-logUserChat(
- "실시간 STOMP 구독 중지"
-);
+      } catch (error) {
 
-}
+        logUserChat(
+          "실시간 구독 해제 실패",
+          error?.message
+        );
 
-};
+      }
 
 
+      unsubscribeRef.current = null;
 
-const clearRealtimePartial=(setRealtimePartial)=>{
 
-partialRef.current="";
+      logUserChat(
+        "실시간 STOMP 구독 중지"
+      );
+    }
+  };
 
-if(setRealtimePartial){
 
-setRealtimePartial("");
+  // =========================================================
+  // 실시간 자막 초기화
+  // =========================================================
 
-}
+  const clearRealtimePartial = (
+    setRealtimePartial
+  ) => {
 
-};
+    partialRef.current = "";
 
 
+    if (setRealtimePartial) {
 
-const vibrateForNewVisitorUtterance=async(sessionId)=>{
+      setRealtimePartial("");
 
-try{
+    }
+  };
 
-const setting=
- await AsyncStorage.getItem(
-  "subtitleVibrate"
- );
 
-if(setting==="true"){
+  // =========================================================
+  // 방문자 발화 진동
+  // =========================================================
 
-Vibration.vibrate(400);
+  const vibrateForNewVisitorUtterance =
+    async (sessionId) => {
 
-logUserChat(
- "실시간 방문자 자막 진동",
- {
-  sessionId
- }
-);
+      try {
 
-}
+        const setting =
+          await AsyncStorage.getItem(
+            "subtitleVibrate"
+          );
 
-}catch(error){
 
-logUserChat(
- "진동 설정 확인 실패",
- error?.message
-);
+        if (setting === "true") {
 
-}
+          Vibration.vibrate(400);
 
-};
 
+          logUserChat(
+            "실시간 방문자 자막 진동",
+            {
+              sessionId,
+            }
+          );
 
+        }
 
-const commitPartial=(text,setMessages)=>{
+      } catch (error) {
 
-const safeText=
- String(text||"").trim();
+        logUserChat(
+          "진동 설정 확인 실패",
+          error?.message
+        );
 
+      }
+    };
 
-if(!safeText){
 
-return;
+  // =========================================================
+  // 실시간 STT 문장 확정
+  // =========================================================
 
-}
+  const commitPartial = (
+    text,
+    setMessages
+  ) => {
 
+    const safeText =
+      String(text || "").trim();
 
-setMessages(prev=>{
 
-const exists=
- prev.some(
-  item=>
-   item.type==="receive"&&
-   item.text===safeText
- );
+    if (!safeText) {
+      return;
+    }
 
 
-if(exists){
+    setMessages((prev) => {
 
-return prev;
+      const exists =
+        prev.some(
+          (item) =>
+            item.type === "receive" &&
+            String(item.text || "").trim() ===
+              safeText
+        );
 
-}
 
+      if (exists) {
+        return prev;
+      }
 
-return[
- ...prev,
- {
-  id:
-   `realtime-${Date.now()}-${++utteranceSeqRef.current}`,
-  messageId:null,
-  text:safeText,
-  type:"receive",
-  senderType:"VISITOR",
-  messageType:"REALTIME_STT",
-  createdAt:
-   new Date().toISOString(),
-  isRealtimeCommitted:true
- }
-];
 
-});
+      return [
+        ...prev,
 
-};
+        {
+          id:
+            `realtime-${Date.now()}-${++utteranceSeqRef.current}`,
 
+          messageId: null,
 
+          transcriptId: null,
 
-const handleRealtimeTranscript=(
- sessionId,
- payload,
- setRealtimePartial,
- setMessages
-)=>{
+          text: safeText,
 
-if(!payload){
+          type: "receive",
 
-return;
+          senderType: "VISITOR",
 
-}
+          messageType:
+            "REALTIME_STT",
 
+          originalContent: null,
 
-if(
- payload.sessionId&&
- String(payload.sessionId)!==
- String(sessionId)
-){
+          createdAt:
+            new Date().toISOString(),
 
-return;
+          isRealtimeCommitted: true,
+        },
+      ];
+    });
+  };
 
-}
 
+  // =========================================================
+  // 실시간 STT 처리
+  // =========================================================
 
+  const handleRealtimeTranscript = (
+    sessionId,
+    payload,
+    setRealtimePartial,
+    setMessages
+  ) => {
 
-const text=
- String(
-  payload.text||
-  ""
- ).trim();
+    if (!payload) {
+      return;
+    }
 
 
+    if (
+      payload.sessionId &&
+      String(payload.sessionId) !==
+        String(sessionId)
+    ) {
+      return;
+    }
 
-if(!text){
 
-return;
+    const text =
+      String(
+        payload.text ||
+        ""
+      ).trim();
 
-}
 
+    if (!text) {
+      return;
+    }
 
 
-const previous=
- String(
-  partialRef.current||
-  ""
- ).trim();
+    const previous =
+      String(
+        partialRef.current ||
+        ""
+      ).trim();
 
 
+    /*
+     * 기존 문장과 완전히 다른 새로운 문장이 들어온 경우
+     * 이전 문장을 확정 메시지로 저장한다.
+     */
+    const newUtterance =
+      previous &&
+      text !== previous &&
+      !text.startsWith(previous);
 
-const newUtterance=
- previous&&
- text!==previous&&
- !text.startsWith(previous);
 
+    if (newUtterance) {
 
+      commitPartial(
+        previous,
+        setMessages
+      );
 
-if(newUtterance){
 
-commitPartial(
- previous,
- setMessages
-);
+      vibrateForNewVisitorUtterance(
+        sessionId
+      );
 
-vibrateForNewVisitorUtterance(
- sessionId
-);
+    }
 
-}
 
+    /*
+     * 첫 발화
+     */
+    if (!previous) {
 
+      vibrateForNewVisitorUtterance(
+        sessionId
+      );
 
-if(!previous){
+    }
 
-vibrateForNewVisitorUtterance(
- sessionId
-);
 
-}
+    partialRef.current =
+      text;
 
 
+    if (isMountedRef.current) {
 
-partialRef.current=text;
+      setRealtimePartial(
+        text
+      );
 
+    }
+  };
 
 
-if(isMountedRef.current){
+  // =========================================================
+  // 실시간 메시지 처리
+  // =========================================================
 
-setRealtimePartial(text);
+  const handleRealtimeMessage = (
+    sessionId,
+    payload,
+    setMessages
+  ) => {
 
-}
+    if (!payload) {
+      return;
+    }
 
-};
 
+    if (
+      payload.sessionId &&
+      String(payload.sessionId) !==
+        String(sessionId)
+    ) {
+      return;
+    }
 
 
-const handleRealtimeMessage=(
- sessionId,
- payload,
- setMessages
-)=>{
+    const message =
+      normalizeMessage(
+        payload
+      );
 
-if(!payload){
 
-return;
+    const safeMessageText =
+      String(
+        message.text ||
+        ""
+      ).trim();
 
-}
 
+    if (!safeMessageText) {
+      return;
+    }
 
-if(
- payload.sessionId&&
- String(payload.sessionId)!==
- String(sessionId)
-){
 
-return;
+    setMessages((prev) => {
 
-}
+      // =====================================================
+      // 1. 서버 messageId 기준 중복 확인
+      // =====================================================
 
+      const exists =
+        prev.some(
+          (item) =>
+            item.messageId &&
+            message.messageId &&
+            String(item.messageId) ===
+              String(message.messageId)
+        );
 
 
-const message=
- normalizeMessage(
-  payload
- );
+      if (exists) {
+        return prev;
+      }
 
 
+      // =====================================================
+      // 2. 내가 보낸 로컬 메시지와
+      //    WebSocket 서버 메시지 중복 방지
+      //
+      // sendMessage() 성공 후 프론트에서는
+      // messageId:null 상태의 로컬 말풍선을 먼저 추가한다.
+      //
+      // 이후 서버에서 같은 메시지가 WebSocket으로 오면
+      // 새로 추가하지 않고 기존 로컬 메시지를
+      // 서버 메시지로 교체한다.
+      // =====================================================
 
-if(!message.text){
+      if (message.type === "send") {
 
-return;
+        /*
+         * 뒤에서부터 가장 최근 메시지를 확인한다.
+         *
+         * 동일한 문장을 연속해서 보내는 경우도 있기 때문에
+         * 가장 최근의 messageId 없는 로컬 메시지만 교체한다.
+         */
+        let localIndex = -1;
 
-}
 
+        for (
+          let i = prev.length - 1;
+          i >= 0;
+          i--
+        ) {
 
+          const item =
+            prev[i];
 
-setMessages(prev=>{
 
+          const itemText =
+            String(
+              item?.text ||
+              ""
+            ).trim();
 
-const exists=
- prev.some(
-  item=>
-   item.messageId&&
-   message.messageId&&
-   String(item.messageId)===
-   String(message.messageId)
- );
 
+          if (
+            item?.type === "send" &&
+            !item?.messageId &&
+            itemText === safeMessageText
+          ) {
 
-if(exists){
+            localIndex = i;
+            break;
 
-return prev;
+          }
+        }
 
-}
 
+        if (localIndex !== -1) {
 
-return[
- ...prev,
- message
-];
+          const next =
+            [...prev];
 
-});
 
+          next[localIndex] = {
+            ...next[localIndex],
+            ...message,
 
-logUserChat(
- "실시간 메시지 수신",
- {
-  sessionId,
-  text:message.text,
-  type:message.type
- }
-);
+            /*
+             * 서버에서 받은 값으로 교체하면서
+             * 기존 화면 순서를 그대로 유지한다.
+             */
+            id:
+              message.id ||
+              next[localIndex].id,
+          };
 
-};
 
+          return next;
+        }
+      }
 
 
-const handleStatus=(sessionId,payload)=>{
+      // =====================================================
+      // 3. 실시간 STT로 이미 추가된 방문자 메시지와
+      //    서버 확정 메시지 중복 방지
+      // =====================================================
 
-const status=
- String(
-  payload?.status||
-  ""
- )
- .toUpperCase();
+      if (message.type === "receive") {
 
+        const realtimeIndex =
+          prev.findIndex(
+            (item) =>
+              item.type === "receive" &&
+              item.isRealtimeCommitted &&
+              String(
+                item.text ||
+                ""
+              ).trim() ===
+                safeMessageText
+          );
 
 
-if(
- ![
-  "CLOSED",
-  "ENDED",
-  "COMPLETE",
-  "COMPLETED"
- ].includes(status)
-){
+        if (realtimeIndex !== -1) {
 
-return;
+          const next =
+            [...prev];
 
-}
 
+          next[realtimeIndex] = {
+            ...next[realtimeIndex],
+            ...message,
 
+            isRealtimeCommitted:
+              false,
+          };
 
-if(remoteEndHandledRef.current){
 
-return;
+          return next;
+        }
+      }
 
-}
 
+      // =====================================================
+      // 4. 새로운 메시지
+      // =====================================================
 
+      return [
+        ...prev,
+        message,
+      ];
+    });
 
-remoteEndHandledRef.current=true;
 
+    logUserChat(
+      "실시간 메시지 수신",
+      {
+        sessionId,
+        messageId:
+          message.messageId,
+        text:
+          message.text,
+        type:
+          message.type,
+      }
+    );
+  };
 
-stopRealtimeSubscription();
 
+  // =========================================================
+  // 세션 상태 처리
+  // =========================================================
 
+  const handleStatus = (
+    sessionId,
+    payload
+  ) => {
 
-moveToIdleMainTab({
+    const status =
+      String(
+        payload?.status ||
+        ""
+      ).toUpperCase();
 
-screen:"히스토리",
 
-endedSessionId:sessionId
+    if (
+      ![
+        "CLOSED",
+        "ENDED",
+        "COMPLETE",
+        "COMPLETED",
+      ].includes(status)
+    ) {
+      return;
+    }
 
-});
 
+    /*
+     * 동일한 종료 이벤트가 여러 번 와도
+     * 화면 이동은 한 번만 수행
+     */
+    if (
+      remoteEndHandledRef.current
+    ) {
+      return;
+    }
 
-};
 
+    remoteEndHandledRef.current =
+      true;
 
 
-const startRealtimeSubscription=(
- sessionId,
- setMessages,
- setRealtimePartial
-)=>{
+    stopRealtimeSubscription();
 
 
-stopRealtimeSubscription();
+    moveToIdleMainTab({
+      screen:
+        "히스토리",
 
+      endedSessionId:
+        sessionId,
+    });
+  };
 
 
-if(!sessionId){
+  // =========================================================
+  // 실시간 구독 시작
+  // =========================================================
 
-return;
+  const startRealtimeSubscription = (
+    sessionId,
+    setMessages,
+    setRealtimePartial
+  ) => {
 
-}
+    /*
+     * 기존 구독이 있다면 먼저 해제
+     */
+    stopRealtimeSubscription();
 
 
+    if (!sessionId) {
+      return;
+    }
 
-partialRef.current="";
 
-remoteEndHandledRef.current=false;
+    partialRef.current =
+      "";
 
 
+    remoteEndHandledRef.current =
+      false;
 
-logUserChat(
- "실시간 STOMP 구독 시작",
- {
-  sessionId
- }
-);
 
+    logUserChat(
+      "실시간 STOMP 구독 시작",
+      {
+        sessionId,
+      }
+    );
 
 
-unsubscribeRef.current=
- subscribeSessionTopics(
-  sessionId,
-  {
+    unsubscribeRef.current =
+      subscribeSessionTopics(
+        sessionId,
+        {
 
-   onRealtimeTranscript:
-    payload=>
-     handleRealtimeTranscript(
-      sessionId,
-      payload,
-      setRealtimePartial,
-      setMessages
-     ),
+          // -----------------------------------------
+          // 실시간 STT
+          // -----------------------------------------
 
+          onRealtimeTranscript:
+            (payload) =>
+              handleRealtimeTranscript(
+                sessionId,
+                payload,
+                setRealtimePartial,
+                setMessages
+              ),
 
-   onMessage:
-    payload=>
-     handleRealtimeMessage(
-      sessionId,
-      payload,
-      setMessages
-     ),
 
+          // -----------------------------------------
+          // 일반 메시지 / 빠른 응답
+          // -----------------------------------------
 
-   onStatus:
-    payload=>
-     handleStatus(
-      sessionId,
-      payload
-     )
+          onMessage:
+            (payload) =>
+              handleRealtimeMessage(
+                sessionId,
+                payload,
+                setMessages
+              ),
 
-  }
- );
 
-};
+          // -----------------------------------------
+          // 세션 상태
+          // -----------------------------------------
 
+          onStatus:
+            (payload) =>
+              handleStatus(
+                sessionId,
+                payload
+              ),
+        }
+      );
+  };
 
 
-return{
+  // =========================================================
+  // Return
+  // =========================================================
 
-startRealtimeSubscription,
+  return {
 
-stopRealtimeSubscription,
+    startRealtimeSubscription,
 
-clearRealtimePartial,
+    stopRealtimeSubscription,
 
-partialRef
+    clearRealtimePartial,
 
-};
-
+    partialRef,
+  };
 }
