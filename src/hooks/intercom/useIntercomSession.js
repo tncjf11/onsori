@@ -882,6 +882,20 @@ export default function useIntercomSession({
       }
 
 
+            /*
+       * 전송 버튼을 누르는 순간
+       * 입력창을 먼저 비운다.
+       *
+       * 현재 백엔드는 메시지를 저장하고
+       * WebSocket으로 전송한 뒤,
+       * TTS WebSocket 문제로 500을 반환할 수 있기 때문에
+       * HTTP 성공 여부와 관계없이 입력창은 초기화한다.
+       */
+      if (isMountedRef.current) {
+        setInputText("");
+      }
+
+
       try {
 
         logUserChat(
@@ -931,13 +945,13 @@ export default function useIntercomSession({
 
 
         /*
-         * 서버 전송 성공 후에만
+         * 서버 전송 성공 후
          * 내 말풍선을 즉시 표시한다.
          *
          * WebSocket에서도 같은 메시지가
-         * 들어올 수 있으므로 기존
-         * appendLocalSendMessage의
-         * 중복 방지 로직을 그대로 사용한다.
+         * 들어올 수 있으므로
+         * useIntercomRealtime에서
+         * 중복 메시지를 처리한다.
          */
         if (isMountedRef.current) {
 
@@ -946,14 +960,6 @@ export default function useIntercomSession({
             "MESSAGE"
           );
 
-        }
-
-
-        /*
-         * 전송 성공 후 입력창 초기화
-         */
-        if (isMountedRef.current) {
-          setInputText("");
         }
 
 
