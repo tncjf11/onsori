@@ -12,11 +12,9 @@ import ChatMessageList from "../../components/intercom/ChatMessageList";
 import EndCallModal from "../../components/intercom/EndCallModal";
 import IntercomHeader from "../../components/intercom/IntercomHeader";
 import IntercomTimer from "../../components/intercom/IntercomTimer";
-import MessageAutocomplete from "../../components/intercom/MessageAutocomplete";
 
 import useIntercomRealtime from "../../hooks/intercom/useIntercomRealtime";
 import useIntercomSession from "../../hooks/intercom/useIntercomSession";
-import useMessageAutocomplete from "../../hooks/intercom/useMessageAutocomplete";
 
 const BOTTOM_NAV_HEIGHT = 80;
 
@@ -43,7 +41,7 @@ export default function IntercomChatScreen() {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   /*
-   * 입력창 + 추천문구 영역 높이
+   * 입력창 영역 높이
    */
   const [inputPanelHeight, setInputPanelHeight] = useState(0);
 
@@ -93,11 +91,15 @@ export default function IntercomChatScreen() {
 
   const {
     currentSessionId,
+
+    /*
+     * STOMP CONNECT 인증에 사용할 JWT
+     */
     token,
+
     inputText,
     setInputText,
     sendMessage,
-    sendQuickReply,
     endCall,
     isLoading,
     seconds,
@@ -119,15 +121,6 @@ export default function IntercomChatScreen() {
     stopRealtimeSubscription,
   });
 
-  const {
-    recommendations,
-    requestAutocomplete,
-    clearAutocomplete,
-  } = useMessageAutocomplete({
-    sessionId: currentSessionId,
-    token,
-  });
-
   /*
    * 화면 초기화
    */
@@ -144,14 +137,21 @@ export default function IntercomChatScreen() {
 
   /*
    * 실시간 STOMP 구독
+   *
+   * 백엔드 권한 검사 추가:
+   * CONNECT 시 JWT Authorization 헤더 필요
    */
   useEffect(() => {
-    if (!currentSessionId) {
+    if (
+      !currentSessionId ||
+      !token
+    ) {
       return;
     }
 
     startRealtimeSubscription(
       currentSessionId,
+      token,
       setMessages,
       setRealtimePartial
     );
@@ -159,7 +159,10 @@ export default function IntercomChatScreen() {
     return () => {
       stopRealtimeSubscription();
     };
-  }, [currentSessionId]);
+  }, [
+    currentSessionId,
+    token,
+  ]);
 
   /*
    * 채팅 최하단 이동
@@ -293,8 +296,6 @@ export default function IntercomChatScreen() {
       return;
     }
 
-    clearAutocomplete();
-
     logUserChat(
       "일반 텍스트 전송 요청",
       {
@@ -315,72 +316,6 @@ export default function IntercomChatScreen() {
       logUserChat(
         "일반 텍스트 전송 처리 실패",
         {
-          error: error?.message,
-        }
-      );
-    }
-  };
-
-  /*
-   * 추천문구 선택
-   */
-  const handleAutocompleteSelect = async (item) => {
-    if (
-      !item ||
-      isEnding
-    ) {
-      return;
-    }
-
-    const replyCode =
-      item?.replyCode;
-
-    const text =
-      String(
-        item?.text ||
-        item?.message ||
-        item?.content ||
-        ""
-      ).trim();
-
-    if (
-      replyCode === undefined ||
-      replyCode === null ||
-      replyCode === ""
-    ) {
-      logUserChat(
-        "추천문구 선택 실패",
-        {
-          text,
-          error: "replyCode가 없습니다.",
-          item,
-        }
-      );
-
-      return;
-    }
-
-    clearAutocomplete();
-
-    try {
-      const success =
-        await sendQuickReply({
-          replyCode,
-          text,
-        });
-
-      if (success) {
-        setInputText("");
-
-        scrollToBottom(80);
-        scrollToBottom(220);
-      }
-    } catch (error) {
-      logUserChat(
-        "추천문구 전송 처리 실패",
-        {
-          replyCode,
-          text,
           error: error?.message,
         }
       );
@@ -481,7 +416,7 @@ export default function IntercomChatScreen() {
         />
 
         {/*
-         * 입력창 + 추천문구
+         * 입력창
          *
          * 기존 absolute 구조 유지
          */}
@@ -528,23 +463,11 @@ export default function IntercomChatScreen() {
               elevation: 12,
             }}
           >
-            <MessageAutocomplete
-              items={recommendations}
-              onSelect={handleAutocompleteSelect}
-            />
-
             <ChatInput
               inputText={inputText}
-
-              onChangeText={(text) => {
-                setInputText(text);
-                requestAutocomplete(text);
-              }}
-
+              onChangeText={setInputText}
               onFocus={handleFocus}
-
               onSend={handleSend}
-
               disabled={isEnding}
             />
           </View>
@@ -554,11 +477,8 @@ export default function IntercomChatScreen() {
       <EndCallModal
         visible={isEndModalVisible}
         isEnding={isEnding}
-
         onConfirm={handleConfirmEnd}
-
         onCancel={handleCancelEnd}
-
         onRequestClose={handleCancelEnd}
       />
     </KeyboardAvoidingView>
