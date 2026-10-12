@@ -64,7 +64,11 @@ export default function MainTabNavigator() {
   };
 
   const normalizeSessionId = (value) => {
-    if (value === undefined || value === null || value === "") {
+    if (
+      value === undefined ||
+      value === null ||
+      value === ""
+    ) {
       return null;
     }
 
@@ -73,52 +77,74 @@ export default function MainTabNavigator() {
 
   const getMainTabRouteParams = (navigation) => {
     try {
-      const parentState = navigation.getParent?.()?.getState?.();
+      const parentState =
+        navigation.getParent?.()?.getState?.();
 
-      const mainTabRoute = parentState?.routes?.find(
-        (route) => route.name === "MainTab"
-      );
+      const mainTabRoute =
+        parentState?.routes?.find(
+          (route) => route.name === "MainTab"
+        );
 
       return mainTabRoute?.params || {};
     } catch (error) {
-      logMainTab("MainTab 부모 route 정보 확인 실패", error?.message);
+      logMainTab(
+        "MainTab 부모 route 정보 확인 실패",
+        error?.message
+      );
+
       return {};
     }
   };
 
   const getHomeRouteParams = (navigation) => {
     try {
-      const navigationState = navigation.getState();
+      const navigationState =
+        navigation.getState();
 
-      const homeRoute = navigationState?.routes?.find(
-        (route) => route.name === "홈"
-      );
+      const homeRoute =
+        navigationState?.routes?.find(
+          (route) => route.name === "홈"
+        );
 
       return homeRoute?.params || {};
     } catch (error) {
-      logMainTab("홈 route 정보 확인 실패", error?.message);
+      logMainTab(
+        "홈 route 정보 확인 실패",
+        error?.message
+      );
+
       return {};
     }
   };
 
   const getIntercomRouteParams = (navigation) => {
     try {
-      const navigationState = navigation.getState();
+      const navigationState =
+        navigation.getState();
 
-      const intercomRoute = navigationState?.routes?.find(
-        (route) => route.name === "인터폰"
-      );
+      const intercomRoute =
+        navigationState?.routes?.find(
+          (route) => route.name === "인터폰"
+        );
 
       return intercomRoute?.params || {};
     } catch (error) {
-      logMainTab("인터폰 route 정보 확인 실패", error?.message);
+      logMainTab(
+        "인터폰 route 정보 확인 실패",
+        error?.message
+      );
+
       return {};
     }
   };
 
   const getFirstExistingValue = (...values) => {
     for (const value of values) {
-      if (value !== undefined && value !== null && value !== "") {
+      if (
+        value !== undefined &&
+        value !== null &&
+        value !== ""
+      ) {
         return value;
       }
     }
@@ -127,9 +153,14 @@ export default function MainTabNavigator() {
   };
 
   const getHomeRouteInfo = (navigation) => {
-    const parentParams = getMainTabRouteParams(navigation);
-    const homeParams = getHomeRouteParams(navigation);
-    const intercomParams = getIntercomRouteParams(navigation);
+    const parentParams =
+      getMainTabRouteParams(navigation);
+
+    const homeParams =
+      getHomeRouteParams(navigation);
+
+    const intercomParams =
+      getIntercomRouteParams(navigation);
 
     const rawStatus = getFirstExistingValue(
       parentParams.intercomStatus,
@@ -147,8 +178,11 @@ export default function MainTabNavigator() {
       intercomParams.sessionId
     );
 
-    const intercomStatus = normalizeStatus(rawStatus);
-    const activeSessionId = normalizeSessionId(rawSessionId);
+    const intercomStatus =
+      normalizeStatus(rawStatus);
+
+    const activeSessionId =
+      normalizeSessionId(rawSessionId);
 
     return {
       intercomStatus,
@@ -159,16 +193,25 @@ export default function MainTabNavigator() {
     };
   };
 
-  const canEnterIntercom = ({ intercomStatus, activeSessionId }) => {
+  const canEnterIntercom = ({
+    intercomStatus,
+    activeSessionId,
+  }) => {
     if (!activeSessionId) {
       return false;
     }
 
-    if (BLOCKED_INTERCOM_STATUSES.has(intercomStatus)) {
+    if (
+      BLOCKED_INTERCOM_STATUSES.has(
+        intercomStatus
+      )
+    ) {
       return false;
     }
 
-    return ACTIVE_INTERCOM_STATUSES.has(intercomStatus);
+    return ACTIVE_INTERCOM_STATUSES.has(
+      intercomStatus
+    );
   };
 
   return (
@@ -176,55 +219,97 @@ export default function MainTabNavigator() {
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarShowLabel: false,
+
         tabBarActiveTintColor: "#06F393",
-        tabBarInactiveTintColor: "#BBBBBB",
+        tabBarInactiveTintColor: "#C7CBD1",
+
         tabBarStyle: {
-          height: Platform.OS === "ios" ? 100 : 80,
-          paddingBottom: Platform.OS === "ios" ? 30 : 10,
-          borderTopLeftRadius: 30,
-          borderTopRightRadius: 30,
+          height:
+            Platform.OS === "ios"
+              ? 100
+              : 80,
+
+          paddingBottom:
+            Platform.OS === "ios"
+              ? 30
+              : 10,
+
           backgroundColor: "#FFFFFF",
+
           position: "absolute",
-          elevation: 20,
-          shadowColor: "#000",
-          shadowOffset: { width: 0, height: -2 },
-          shadowOpacity: 0.1,
-          shadowRadius: 10,
+
+          borderTopLeftRadius: 18,
+          borderTopRightRadius: 18,
+
+          borderTopWidth: 1,
+          borderTopColor: "#EEF0F3",
+
+          elevation: 8,
+
+          shadowColor: "#000000",
+          shadowOffset: {
+            width: 0,
+            height: -2,
+          },
+          shadowOpacity: 0.05,
+          shadowRadius: 8,
         },
+
         tabBarIcon: ({ color }) => (
           <TabIcon
             source={getTabIcon(route.name)}
-            style={{ tintColor: color }}
+            style={{
+              tintColor: color,
+            }}
             resizeMode="contain"
           />
         ),
       })}
     >
-      <Tab.Screen name="홈" component={HomeScreen} />
+      <Tab.Screen
+        name="홈"
+        component={HomeScreen}
+      />
 
       <Tab.Screen
         name="인터폰"
         component={IntercomChatScreen}
         listeners={({ navigation }) => ({
           tabPress: (event) => {
-            const routeInfo = getHomeRouteInfo(navigation);
-            const { intercomStatus, activeSessionId } = routeInfo;
+            const routeInfo =
+              getHomeRouteInfo(navigation);
+
+            const {
+              intercomStatus,
+              activeSessionId,
+            } = routeInfo;
 
             logMainTab("인터폰 탭 클릭", {
               intercomStatus,
               activeSessionId,
-              parentParams: routeInfo.parentParams,
-              homeParams: routeInfo.homeParams,
-              intercomParams: routeInfo.intercomParams,
+              parentParams:
+                routeInfo.parentParams,
+              homeParams:
+                routeInfo.homeParams,
+              intercomParams:
+                routeInfo.intercomParams,
             });
 
-            if (!canEnterIntercom({ intercomStatus, activeSessionId })) {
-              event.preventDefault();
-
-              logMainTab("인터폰 탭 차단", {
+            if (
+              !canEnterIntercom({
                 intercomStatus,
                 activeSessionId,
-              });
+              })
+            ) {
+              event.preventDefault();
+
+              logMainTab(
+                "인터폰 탭 차단",
+                {
+                  intercomStatus,
+                  activeSessionId,
+                }
+              );
 
               if (!activeSessionId) {
                 Alert.alert(
@@ -245,25 +330,41 @@ export default function MainTabNavigator() {
 
             event.preventDefault();
 
-            logMainTab("인터폰 탭 진입 허용", {
-              sessionId: activeSessionId,
-              intercomStatus,
-            });
+            logMainTab(
+              "인터폰 탭 진입 허용",
+              {
+                sessionId: activeSessionId,
+                intercomStatus,
+              }
+            );
 
-            navigation.navigate("인터폰", {
-              sessionId: activeSessionId,
-              activeSessionId,
-              intercomStatus: "incoming",
-              enteredFrom: "mainTab",
-              refreshKey: Date.now(),
-            });
+            navigation.navigate(
+              "인터폰",
+              {
+                sessionId:
+                  activeSessionId,
+                activeSessionId,
+                intercomStatus:
+                  "incoming",
+                enteredFrom:
+                  "mainTab",
+                refreshKey:
+                  Date.now(),
+              }
+            );
           },
         })}
       />
 
-      <Tab.Screen name="히스토리" component={HistoryScreen} />
+      <Tab.Screen
+        name="히스토리"
+        component={HistoryScreen}
+      />
 
-      <Tab.Screen name="설정" component={SettingScreen} />
+      <Tab.Screen
+        name="설정"
+        component={SettingScreen}
+      />
     </Tab.Navigator>
   );
 }

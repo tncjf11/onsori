@@ -104,6 +104,7 @@ const RecentCallItem = ({
           .filter(Boolean)
           .map((tag) => String(tag).trim())
           .filter((tag) => !STATUS_TAGS.has(tag))
+          .filter((tag) => tag.toUpperCase() !== "GENERAL")
       : [];
 
     return ["종료 / 완료", ...baseTags];
@@ -201,7 +202,7 @@ const TagRow = styled.View`
 `;
 
 const TagBox = styled.View`
-  background-color: #F2F4F7;
+  background-color: #f2f4f7;
   padding: 3px 8px;
   border-radius: 4px;
   margin-right: 6px;

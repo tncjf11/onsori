@@ -6,6 +6,7 @@ import {
   Platform,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import ChatInput from "../../components/intercom/ChatInput";
 import ChatMessageList from "../../components/intercom/ChatMessageList";
@@ -17,11 +18,6 @@ import useIntercomRealtime from "../../hooks/intercom/useIntercomRealtime";
 import useIntercomSession from "../../hooks/intercom/useIntercomSession";
 
 const BOTTOM_NAV_HEIGHT = 80;
-
-/*
- * 키보드 상단 툴바와 겹치지 않도록
- * 입력창을 조금 더 위로 올리는 여유값
- */
 const KEYBOARD_EXTRA_OFFSET = 50;
 
 export default function IntercomChatScreen() {
@@ -34,15 +30,7 @@ export default function IntercomChatScreen() {
   const [messages, setMessages] = useState([]);
   const [realtimePartial, setRealtimePartial] = useState("");
   const [isEndModalVisible, setIsEndModalVisible] = useState(false);
-
-  /*
-   * 키보드 실제 높이
-   */
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-
-  /*
-   * 입력창 영역 높이
-   */
   const [inputPanelHeight, setInputPanelHeight] = useState(0);
 
   const isKeyboardVisible = keyboardHeight > 0;
@@ -63,6 +51,22 @@ export default function IntercomChatScreen() {
           params: {
             screen,
             endedSessionId,
+          },
+        },
+      ],
+    });
+  };
+
+  const handleBackPress = () => {
+    Keyboard.dismiss();
+
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: "MainTab",
+          params: {
+            screen: "홈",
           },
         },
       ],
@@ -91,12 +95,7 @@ export default function IntercomChatScreen() {
 
   const {
     currentSessionId,
-
-    /*
-     * STOMP CONNECT 인증에 사용할 JWT
-     */
     token,
-
     inputText,
     setInputText,
     sendMessage,
@@ -109,10 +108,7 @@ export default function IntercomChatScreen() {
     initialSessionId:
       route.params?.sessionId ||
       route.params?.activeSessionId,
-
-    routeToken:
-      route.params?.token,
-
+    routeToken: route.params?.token,
     isMountedRef,
     logUserChat,
     handleAuthExpired,
@@ -121,9 +117,6 @@ export default function IntercomChatScreen() {
     stopRealtimeSubscription,
   });
 
-  /*
-   * 화면 초기화
-   */
   useEffect(() => {
     isMountedRef.current = true;
 
@@ -135,17 +128,8 @@ export default function IntercomChatScreen() {
     };
   }, []);
 
-  /*
-   * 실시간 STOMP 구독
-   *
-   * 백엔드 권한 검사 추가:
-   * CONNECT 시 JWT Authorization 헤더 필요
-   */
   useEffect(() => {
-    if (
-      !currentSessionId ||
-      !token
-    ) {
+    if (!currentSessionId || !token) {
       return;
     }
 
@@ -159,14 +143,8 @@ export default function IntercomChatScreen() {
     return () => {
       stopRealtimeSubscription();
     };
-  }, [
-    currentSessionId,
-    token,
-  ]);
+  }, [currentSessionId, token]);
 
-  /*
-   * 채팅 최하단 이동
-   */
   const scrollToBottom = (
     delay = 100,
     animated = true
@@ -180,9 +158,6 @@ export default function IntercomChatScreen() {
     }, delay);
   };
 
-  /*
-   * 키보드 높이 감지
-   */
   useEffect(() => {
     const showEvent =
       Platform.OS === "ios"
@@ -202,11 +177,6 @@ export default function IntercomChatScreen() {
 
         setKeyboardHeight(height);
 
-        /*
-         * 키보드 / absolute 입력창 / ScrollView 여백이
-         * 각각 다른 타이밍에 계산될 수 있어서
-         * 여러 번 마지막 위치를 맞춘다.
-         */
         scrollToBottom(100);
         scrollToBottom(300);
         scrollToBottom(500);
@@ -229,10 +199,6 @@ export default function IntercomChatScreen() {
     };
   }, []);
 
-  /*
-   * 키보드 높이가 실제 state에 반영된 후
-   * 다시 마지막 메시지로 이동
-   */
   useEffect(() => {
     if (keyboardHeight <= 0) {
       return;
@@ -249,10 +215,6 @@ export default function IntercomChatScreen() {
     };
   }, [keyboardHeight]);
 
-  /*
-   * 입력창 높이가 측정된 이후에도
-   * 마지막 메시지를 입력창 바로 위로 맞춘다.
-   */
   useEffect(() => {
     if (
       keyboardHeight <= 0 ||
@@ -268,63 +230,40 @@ export default function IntercomChatScreen() {
       clearTimeout(timer1);
       clearTimeout(timer2);
     };
-  }, [
-    keyboardHeight,
-    inputPanelHeight,
-  ]);
+  }, [keyboardHeight, inputPanelHeight]);
 
-  /*
-   * 입력창 포커스
-   */
   const handleFocus = () => {
     scrollToBottom(100);
     scrollToBottom(300);
     scrollToBottom(500);
   };
 
-  /*
-   * 일반 메시지 전송
-   */
   const handleSend = async () => {
-    const text =
-      String(inputText || "").trim();
+    const text = String(inputText || "").trim();
 
-    if (
-      !text ||
-      isEnding
-    ) {
+    if (!text || isEnding) {
       return;
     }
 
-    logUserChat(
-      "일반 텍스트 전송 요청",
-      {
-        sessionId: currentSessionId,
-        text,
-      }
-    );
+    logUserChat("일반 텍스트 전송 요청", {
+      sessionId: currentSessionId,
+      text,
+    });
 
     try {
-      const success =
-        await sendMessage();
+      const success = await sendMessage();
 
       if (success) {
         scrollToBottom(80);
         scrollToBottom(220);
       }
     } catch (error) {
-      logUserChat(
-        "일반 텍스트 전송 처리 실패",
-        {
-          error: error?.message,
-        }
-      );
+      logUserChat("일반 텍스트 전송 처리 실패", {
+        error: error?.message,
+      });
     }
   };
 
-  /*
-   * 통화 종료 모달
-   */
   const handleOpenEndModal = () => {
     if (isEnding) {
       return;
@@ -350,33 +289,16 @@ export default function IntercomChatScreen() {
     setIsEndModalVisible(false);
   };
 
-  /*
-   * 입력창 위치
-   *
-   * 키보드 없음:
-   * → 하단 네비 바로 위
-   *
-   * 키보드 있음:
-   * → 키보드 위 + 추가 여백
-   */
   const inputBottom =
     isKeyboardVisible
       ? keyboardHeight + KEYBOARD_EXTRA_OFFSET
       : BOTTOM_NAV_HEIGHT;
 
-  /*
-   * absolute 입력창 때문에
-   * 마지막 메시지가 입력창 뒤에 숨지 않도록
-   * ScrollView 하단 공간 확보
-   */
   const messageBottomInset =
     inputBottom +
     inputPanelHeight +
     12;
 
-  /*
-   * 기존 레이아웃 유지
-   */
   const keyboardBehavior =
     Platform.OS === "ios"
       ? "padding"
@@ -391,14 +313,20 @@ export default function IntercomChatScreen() {
       behavior={keyboardBehavior}
       keyboardVerticalOffset={0}
     >
-      <IntercomHeader
-        isEnding={isEnding}
-        onOpenEndModal={handleOpenEndModal}
-      />
+      <SafeAreaView
+        edges={["top"]}
+        style={{
+          backgroundColor: "#ffffff",
+        }}
+      >
+        <IntercomHeader
+          isEnding={isEnding}
+          onBackPress={handleBackPress}
+          onOpenEndModal={handleOpenEndModal}
+        />
+      </SafeAreaView>
 
-      <IntercomTimer
-        seconds={seconds}
-      />
+      <IntercomTimer seconds={seconds} />
 
       <View
         style={{
@@ -415,11 +343,6 @@ export default function IntercomChatScreen() {
           bottomInset={messageBottomInset}
         />
 
-        {/*
-         * 입력창
-         *
-         * 기존 absolute 구조 유지
-         */}
         <View
           pointerEvents="box-none"
           style={{
@@ -434,8 +357,7 @@ export default function IntercomChatScreen() {
           <View
             onLayout={(event) => {
               const height =
-                event?.nativeEvent
-                  ?.layout?.height || 0;
+                event?.nativeEvent?.layout?.height || 0;
 
               if (
                 height > 0 &&
@@ -447,19 +369,15 @@ export default function IntercomChatScreen() {
             style={{
               width: "100%",
               backgroundColor: "#ffffff",
-
               borderTopLeftRadius: 28,
               borderTopRightRadius: 28,
-
               shadowColor: "#000000",
               shadowOpacity: 0.08,
               shadowRadius: 8,
-
               shadowOffset: {
                 width: 0,
                 height: -2,
               },
-
               elevation: 12,
             }}
           >

@@ -835,7 +835,7 @@ export default function SettingScreen() {
             }}
           >
             <ActionLeft>
-              <ActionIcon
+              <LogoutIcon
                 source={
                   logoutIcon
                 }
@@ -1085,6 +1085,11 @@ const ActionItem = styled.TouchableOpacity`
 const ActionLeft = styled.View`
   flex-direction: row;
   align-items: center;
+`;
+const LogoutIcon = styled.Image`
+  width: 28px;
+  height: 28px;
+  margin-right: 8px;
 `;
 const ActionIcon = styled.Image`
   width: 24px;

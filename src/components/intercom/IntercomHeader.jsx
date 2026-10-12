@@ -1,107 +1,87 @@
-import {TouchableOpacity} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { TouchableOpacity } from "react-native";
 import styled from "styled-components/native";
 
-const backIcon=require("../../assets/back_icon.png");
-const bellIcon=require("../../assets/bell.png");
-const callEndIcon=require("../../assets/call_end.png");
+const backIcon = require("../../assets/back_icon.png");
+const bellIcon = require("../../assets/bell.png");
 
 export default function IntercomHeader({
- isEnding=false,
- onOpenEndModal,
-}){
- return(
-  <Header>
-   <HeaderSide>
-    <TouchableOpacity
-     onPress={onOpenEndModal}
-     disabled={isEnding}
-     activeOpacity={0.7}
-    >
-     <IconBtn
-      source={backIcon}
-      resizeMode="contain"
-     />
-    </TouchableOpacity>
-   </HeaderSide>
+  isEnding = false,
+  onBackPress,
+  onOpenEndModal,
+}) {
+  return (
+    <Header>
+      <TouchableOpacity
+        onPress={onBackPress}
+        activeOpacity={0.7}
+        disabled={isEnding}
+      >
+        <BackIcon
+          source={backIcon}
+          resizeMode="contain"
+        />
+      </TouchableOpacity>
 
-   <HeaderCenterSide>
-    <HeaderCenter>
-     <Logo
-      source={bellIcon}
-      resizeMode="contain"
-     />
-     <HeaderTitle>
-      인터폰 실시간
-     </HeaderTitle>
-    </HeaderCenter>
-   </HeaderCenterSide>
+      <HeaderTitleContainer>
+        <Logo
+          source={bellIcon}
+          resizeMode="contain"
+        />
 
-   <HeaderSide
-    style={{
-     flexDirection:"row",
-     justifyContent:"flex-end",
-     alignItems:"center",
-    }}
-   >
-    <TouchableOpacity
-     onPress={onOpenEndModal}
-     disabled={isEnding}
-     activeOpacity={0.7}
-    >
-     <EndIcon
-      source={callEndIcon}
-      resizeMode="contain"
-     />
-    </TouchableOpacity>
-   </HeaderSide>
-  </Header>
- );
+        <HeaderTitle>
+          인터폰 실시간
+        </HeaderTitle>
+      </HeaderTitleContainer>
+
+      <TouchableOpacity
+        onPress={onOpenEndModal}
+        disabled={isEnding}
+        activeOpacity={0.7}
+        style={{
+          padding: 4,
+          opacity: isEnding ? 0.5 : 1,
+        }}
+      >
+        <Ionicons
+          name="trash-outline"
+          size={24}
+          color="#FF4D4D"
+        />
+      </TouchableOpacity>
+    </Header>
+  );
 }
 
-const Header=styled.View`
- height:64px;
- flex-direction:row;
- justify-content:space-between;
- align-items:center;
- padding:0 18px;
- background-color:#ffffff;
- border-bottom-width:1px;
- border-bottom-color:#eeeeee;
+const Header = styled.View`
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 20px;
+  background-color: #ffffff;
+  border-bottom-width: 1px;
+  border-bottom-color: #eeeeee;
 `;
 
-const HeaderSide=styled.View`
- width:90px;
+const BackIcon = styled.Image`
+  width: 24px;
+  height: 24px;
 `;
 
-const HeaderCenterSide=styled.View`
- width:120px;
- align-items:center;
+const HeaderTitleContainer = styled.View`
+  flex-direction: row;
+  align-items: center;
+  margin-left: 10px;
 `;
 
-const HeaderCenter=styled.View`
- flex-direction:row;
- align-items:center;
- justify-content:center;
+const Logo = styled.Image`
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
 `;
 
-const IconBtn=styled.Image`
- width:26px;
- height:26px;
-`;
-
-const EndIcon=styled.Image`
- width:30px;
- height:30px;
-`;
-
-const Logo=styled.Image`
- width:30px;
- height:30px;
- margin-right:8px;
-`;
-
-const HeaderTitle=styled.Text`
- font-size:17px;
- font-weight:800;
- color:#111827;
+const HeaderTitle = styled.Text`
+  font-size: 18px;
+  font-weight: 800;
+  color: #111827;
 `;

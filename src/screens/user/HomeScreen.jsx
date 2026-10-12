@@ -13,6 +13,7 @@ import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-contex
 import { useNavigation, useIsFocused, useRoute } from "@react-navigation/native";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useAudioPlayer, setAudioModeAsync } from "expo-audio";
 
 import BASE_URL from "../../api/config";
 import RecentCallItem from "../../components/RecentCallItem";
@@ -59,6 +60,7 @@ export default function HomeScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const isFocused = useIsFocused();
+  const ringPlayer = useAudioPlayer(require("../../assets/intercom_ring.wav"));
 
   const [modalVisible, setModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -354,25 +356,49 @@ export default function HomeScreen() {
     };
   };
 
+  const stopRingSound = () => {
+    try {
+      ringPlayer.pause();
+      ringPlayer.seekTo(0).catch((error) => {
+        logHome("호출 벨소리 위치 초기화 실패", error?.message);
+      });
+    } catch (error) {
+      logHome("호출 벨소리 중지 실패", error?.message);
+    }
+  };
+
   const triggerHardwareAlert = async (status) => {
     try {
       if (status === "incoming") {
-        const vibSetting = await AsyncStorage.getItem("callVibrate");
+        const [vibSetting, soundSetting] = await Promise.all([
+          AsyncStorage.getItem("callVibrate"),
+          AsyncStorage.getItem("callSound"),
+        ]);
 
-        logHome("호출 진동 설정 확인", {
+        logHome("호출 알림 설정 확인", {
           callVibrate: vibSetting,
+          callSound: soundSetting,
         });
 
         if (vibSetting === "true") {
           Vibration.vibrate([0, 1000, 1000], true);
           logHome("호출 진동 시작");
         }
+
+        if (soundSetting === "true") {
+          await ringPlayer.seekTo(0);
+          ringPlayer.loop = true;
+          ringPlayer.volume = 1;
+          ringPlayer.play();
+          logHome("호출 벨소리 시작");
+        }
       } else {
         Vibration.cancel();
-        logHome("호출 진동 중지");
+        stopRingSound();
+        logHome("호출 알림 중지");
       }
     } catch (error) {
-      logHome("진동 제어 실패", error?.message);
+      logHome("호출 알림 제어 실패", error?.message);
     }
   };
 
@@ -559,11 +585,30 @@ export default function HomeScreen() {
   };
 
   useEffect(() => {
+    const setupAudio = async () => {
+      try {
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          shouldRouteThroughEarpiece: false,
+          interruptionMode: "doNotMix",
+        });
+        ringPlayer.loop = true;
+        ringPlayer.volume = 1;
+      } catch (error) {
+        logHome("오디오 설정 실패", error?.message);
+      }
+    };
+
+    setupAudio();
+  }, [ringPlayer]);
+
+  useEffect(() => {
     isMountedRef.current = true;
 
     return () => {
       isMountedRef.current = false;
       Vibration.cancel();
+      stopRingSound();
     };
   }, []);
 
@@ -574,6 +619,7 @@ export default function HomeScreen() {
     if (routeStatus === "idle" && !routeSessionId) {
       updateIntercomStatus("idle", "route params idle", null);
       Vibration.cancel();
+      stopRingSound();
     }
   }, [
     route.params?.refresh,
@@ -596,6 +642,7 @@ export default function HomeScreen() {
 
     return () => {
       Vibration.cancel();
+      stopRingSound();
 
       if (pollingTimer) {
         clearInterval(pollingTimer);
@@ -627,6 +674,7 @@ export default function HomeScreen() {
 
     try {
       Vibration.cancel();
+      stopRingSound();
 
       const savedToken = token || (await AsyncStorage.getItem("accessToken"));
       const deviceUid = await getDeviceUid();
