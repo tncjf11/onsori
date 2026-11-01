@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "584523046989",
+    "project_id": "onsori-c5341",
+    "storage_bucket": "onsori-c5341.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:584523046989:android:367ff011fd58d1b46c3c04",
+        "android_client_info": {
+          "package_name": "com.yunsucheol.onsori"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAjcXghvKyg8_dh1_HdOTptjqSJwM2Lpa0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
