@@ -8,24 +8,38 @@
     "scheme": "onsori",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+
     "ios": {
       "supportsTablet": true
     },
+
     "android": {
-      "softwareKeyboardLayoutMode": "resize",
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
-      "edgeToEdgeEnabled": false,
-      "predictiveBackGestureEnabled": false
-    },
+  "package": "com.yunsucheol.onsori",
+  "googleServicesFile": "./google-services.json",
+  "softwareKeyboardLayoutMode": "resize",
+
+  "adaptiveIcon": {
+    "backgroundColor": "#E6F4FE",
+    "foregroundImage": "./assets/images/android-icon-foreground.png",
+    "backgroundImage": "./assets/images/android-icon-background.png",
+    "monochromeImage": "./assets/images/android-icon-monochrome.png"
+  },
+
+  "edgeToEdgeEnabled": false,
+  "predictiveBackGestureEnabled": false,
+
+  "permissions": [
+    "android.permission.RECORD_AUDIO",
+    "android.permission.MODIFY_AUDIO_SETTINGS"
+  ]
+  },
+
     "web": {
       "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
+    
+
     "plugins": [
       [
         "expo-splash-screen",
@@ -39,21 +53,42 @@
           }
         }
       ],
-      "expo-audio"
+
+      "expo-audio",
+      "expo-font",
+      "expo-router",
+      "expo-asset",
+
+      "expo-notifications",
+
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ],
+
     "experiments": {
       "reactCompiler": true
     },
+
     "extra": {
       "eas": {
         "projectId": "a134ab37-c450-485b-aba5-a2a11fe0008d"
       }
     },
+
     "runtimeVersion": {
       "policy": "appVersion"
     },
+
     "updates": {
       "url": "https://u.expo.dev/a134ab37-c450-485b-aba5-a2a11fe0008d"
-    }
+    },
+
+    "owner": "yunsucheol"
   }
 }

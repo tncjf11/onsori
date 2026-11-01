@@ -1,19 +1,26 @@
-import React, { useState, useEffect, useRef } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
+  useIsFocused,
+  useNavigation,
+  useRoute,
+} from "@react-navigation/native";
+import axios from "axios";
+import {
+  setAudioModeAsync,
+  useAudioPlayer,
+} from "expo-audio";
+import { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
   ScrollView,
   TouchableOpacity,
-  Modal,
-  ActivityIndicator,
   Vibration,
-  Alert,
 } from "react-native";
-import styled from "styled-components/native";
-import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView as SafeAreaContainer } from "react-native-safe-area-context";
-import { useNavigation, useIsFocused, useRoute } from "@react-navigation/native";
-import axios from "axios";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useAudioPlayer, setAudioModeAsync } from "expo-audio";
+import styled from "styled-components/native";
 
 import BASE_URL from "../../api/config";
 import RecentCallItem from "../../components/RecentCallItem";
@@ -60,26 +67,54 @@ export default function HomeScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const isFocused = useIsFocused();
-  const ringPlayer = useAudioPlayer(require("../../assets/intercom_ring.wav"));
 
-  const [modalVisible, setModalVisible] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [activeSessionId, setActiveSessionId] = useState(null);
-  const [intercomStatus, setIntercomStatus] = useState("idle");
-  const [recentCalls, setRecentCalls] = useState([]);
-  const [token, setToken] = useState(null);
+  const ringPlayer = useAudioPlayer(
+    require("../../assets/intercom_ring.wav")
+  );
 
-  const intercomStatusRef = useRef("idle");
-  const activeSessionIdRef = useRef(null);
-  const lastHomeStatusLogRef = useRef("");
-  const isMountedRef = useRef(true);
+  const [modalVisible, setModalVisible] =
+    useState(false);
+
+  const [isLoading, setIsLoading] =
+    useState(true);
+
+  const [activeSessionId, setActiveSessionId] =
+    useState(null);
+
+  const [intercomStatus, setIntercomStatus] =
+    useState("idle");
+
+  const [recentCalls, setRecentCalls] =
+    useState([]);
+
+  const [token, setToken] =
+    useState(null);
+
+  const intercomStatusRef =
+    useRef("idle");
+
+  const activeSessionIdRef =
+    useRef(null);
+
+  const lastHomeStatusLogRef =
+    useRef("");
+
+  const isMountedRef =
+    useRef(true);
 
   const getDeviceUid = async () => {
-    return (await AsyncStorage.getItem("deviceUid")) || DEFAULT_DEVICE_UID;
+    return (
+      (await AsyncStorage.getItem("deviceUid")) ||
+      DEFAULT_DEVICE_UID
+    );
   };
 
-  const syncNavigationParams = (nextStatus, nextSessionId) => {
-    const safeSessionId = nextSessionId || null;
+  const syncNavigationParams = (
+    nextStatus,
+    nextSessionId
+  ) => {
+    const safeSessionId =
+      nextSessionId || null;
 
     navigation.setParams?.({
       intercomStatus: nextStatus,
@@ -87,56 +122,96 @@ export default function HomeScreen() {
       sessionId: safeSessionId,
     });
 
-    navigation.getParent?.()?.setParams?.({
-      intercomStatus: nextStatus,
-      activeSessionId: safeSessionId,
-      sessionId: safeSessionId,
-    });
+    navigation
+      .getParent?.()
+      ?.setParams?.({
+        intercomStatus: nextStatus,
+        activeSessionId: safeSessionId,
+        sessionId: safeSessionId,
+      });
   };
 
   const updateIntercomStatus = (
     nextStatus,
     reason = "",
-    nextSessionId = activeSessionIdRef.current
+    nextSessionId =
+      activeSessionIdRef.current
   ) => {
-    const safeStatus = nextStatus || "idle";
-    const safeSessionId = nextSessionId || null;
-    const prevStatus = intercomStatusRef.current;
-    const prevSessionId = activeSessionIdRef.current;
+    const safeStatus =
+      nextStatus || "idle";
 
-    intercomStatusRef.current = safeStatus;
-    activeSessionIdRef.current = safeSessionId;
+    const safeSessionId =
+      nextSessionId || null;
+
+    const prevStatus =
+      intercomStatusRef.current;
+
+    const prevSessionId =
+      activeSessionIdRef.current;
+
+    intercomStatusRef.current =
+      safeStatus;
+
+    activeSessionIdRef.current =
+      safeSessionId;
 
     if (isMountedRef.current) {
-      setIntercomStatus(safeStatus);
-      setActiveSessionId(safeSessionId);
+      setIntercomStatus(
+        safeStatus
+      );
+
+      setActiveSessionId(
+        safeSessionId
+      );
     }
 
-    syncNavigationParams(safeStatus, safeSessionId);
+    syncNavigationParams(
+      safeStatus,
+      safeSessionId
+    );
 
-    const logKey = `${prevStatus}->${safeStatus}:${prevSessionId}->${safeSessionId}:${reason}`;
+    const logKey =
+      `${prevStatus}->${safeStatus}:` +
+      `${prevSessionId}->${safeSessionId}:` +
+      `${reason}`;
 
-    if (lastHomeStatusLogRef.current !== logKey) {
-      lastHomeStatusLogRef.current = logKey;
+    if (
+      lastHomeStatusLogRef.current !==
+      logKey
+    ) {
+      lastHomeStatusLogRef.current =
+        logKey;
 
-      logHome("인터폰 상태 동기화", {
-        previous: prevStatus,
-        next: safeStatus,
-        previousSessionId: prevSessionId,
-        activeSessionId: safeSessionId,
-        reason,
-      });
+      logHome(
+        "인터폰 상태 동기화",
+        {
+          previous:
+            prevStatus,
+          next:
+            safeStatus,
+          previousSessionId:
+            prevSessionId,
+          activeSessionId:
+            safeSessionId,
+          reason,
+        }
+      );
     }
   };
 
-  const normalizeStatus = (value) => {
+  const normalizeStatus = (
+    value
+  ) => {
     return String(value || "")
       .trim()
       .toUpperCase();
   };
 
-  const getSessionStatus = (session) => {
-    const safeSession = session || {};
+  const getSessionStatus = (
+    session
+  ) => {
+    const safeSession =
+      session || {};
 
     return normalizeStatus(
       safeSession.status ||
@@ -147,8 +222,11 @@ export default function HomeScreen() {
     );
   };
 
-  const getSessionId = (session) => {
-    const safeSession = session || {};
+  const getSessionId = (
+    session
+  ) => {
+    const safeSession =
+      session || {};
 
     return (
       safeSession.sessionId ??
@@ -159,8 +237,11 @@ export default function HomeScreen() {
     );
   };
 
-  const hasEndedTime = (session) => {
-    const safeSession = session || {};
+  const hasEndedTime = (
+    session
+  ) => {
+    const safeSession =
+      session || {};
 
     return Boolean(
       safeSession.endedAt ||
@@ -171,59 +252,154 @@ export default function HomeScreen() {
     );
   };
 
-  const isEndedSession = (session) => {
-    if (!session) return true;
+  const isEndedSession = (
+    session
+  ) => {
+    if (!session) {
+      return true;
+    }
 
-    const status = getSessionStatus(session);
+    const status =
+      getSessionStatus(session);
 
-    if (hasEndedTime(session)) return true;
-    if (CLOSED_SESSION_STATUSES.has(status)) return true;
+    if (
+      hasEndedTime(session)
+    ) {
+      return true;
+    }
+
+    if (
+      CLOSED_SESSION_STATUSES.has(
+        status
+      )
+    ) {
+      return true;
+    }
 
     return false;
   };
 
-  const isActiveSession = (session) => {
-    if (!session) return false;
-    if (isEndedSession(session)) return false;
+  const isActiveSession = (
+    session
+  ) => {
+    if (!session) {
+      return false;
+    }
 
-    const sessionId = getSessionId(session);
-    const status = getSessionStatus(session);
+    if (
+      isEndedSession(session)
+    ) {
+      return false;
+    }
 
-    if (!sessionId) return false;
-    if (!status) return true;
+    const sessionId =
+      getSessionId(session);
 
-    return ACTIVE_SESSION_STATUSES.has(status);
+    const status =
+      getSessionStatus(session);
+
+    if (!sessionId) {
+      return false;
+    }
+
+    if (!status) {
+      return true;
+    }
+
+    return ACTIVE_SESSION_STATUSES.has(
+      status
+    );
   };
 
-  const parseServerDate = (isoString) => {
-    if (!isoString) return null;
+  const parseServerDate = (
+    isoString
+  ) => {
+    if (!isoString) {
+      return null;
+    }
 
     try {
-      const stringValue = String(isoString).trim();
-      const hasExplicitTimezone =
-        stringValue.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(stringValue);
+      const stringValue =
+        String(isoString).trim();
 
-      if (hasExplicitTimezone) {
-        const date = new Date(stringValue);
-        return Number.isNaN(date.getTime()) ? null : date;
+      const hasExplicitTimezone =
+        stringValue.endsWith("Z") ||
+        /[+-]\d{2}:\d{2}$/.test(
+          stringValue
+        );
+
+      if (
+        hasExplicitTimezone
+      ) {
+        const date =
+          new Date(stringValue);
+
+        return Number.isNaN(
+          date.getTime()
+        )
+          ? null
+          : date;
       }
 
-      const normalized = stringValue.replace("T", " ");
-      const [datePart, timePart = "00:00:00"] = normalized.split(" ");
-      const [year, month, day] = datePart.split("-").map(Number);
-      const [hour = 0, minute = 0, second = 0] = timePart
-        .split(":")
-        .map((value) => Number(String(value).split(".")[0]));
+      const normalized =
+        stringValue.replace(
+          "T",
+          " "
+        );
 
-      if (!year || !month || !day) return null;
+      const [
+        datePart,
+        timePart = "00:00:00",
+      ] =
+        normalized.split(" ");
 
-      return new Date(year, month - 1, day, hour, minute, second);
+      const [
+        year,
+        month,
+        day,
+      ] =
+        datePart
+          .split("-")
+          .map(Number);
+
+      const [
+        hour = 0,
+        minute = 0,
+        second = 0,
+      ] =
+        timePart
+          .split(":")
+          .map((value) =>
+            Number(
+              String(value)
+                .split(".")[0]
+            )
+          );
+
+      if (
+        !year ||
+        !month ||
+        !day
+      ) {
+        return null;
+      }
+
+      return new Date(
+        year,
+        month - 1,
+        day,
+        hour,
+        minute,
+        second
+      );
     } catch {
       return null;
     }
   };
 
-  const getLogDateValue = (log = {}) => {
+  const getLogDateValue = (
+    log = {}
+  ) => {
     return (
       log.createdAt ||
       log.startedAt ||
@@ -240,97 +416,305 @@ export default function HomeScreen() {
     );
   };
 
-  const getSortTime = (log = {}) => {
-    const date = parseServerDate(getLogDateValue(log));
+  const getSortTime = (
+    log = {}
+  ) => {
+    const date =
+      parseServerDate(
+        getLogDateValue(log)
+      );
 
-    if (!date || Number.isNaN(date.getTime())) {
+    if (
+      !date ||
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
       return 0;
     }
 
     return date.getTime();
   };
 
-  const formatTimeGap = (isoString) => {
-    if (!isoString) return "기록 없음";
+  const formatTimeGap = (
+    isoString
+  ) => {
+    if (!isoString) {
+      return "기록 없음";
+    }
 
     try {
-      const now = new Date();
-      const logTime = parseServerDate(isoString);
+      const now =
+        new Date();
 
-      if (!logTime || Number.isNaN(logTime.getTime())) {
+      const logTime =
+        parseServerDate(
+          isoString
+        );
+
+      if (
+        !logTime ||
+        Number.isNaN(
+          logTime.getTime()
+        )
+      ) {
         return "시간 오차";
       }
 
-      const diffMs = now.getTime() - logTime.getTime();
-      const diffMins = Math.floor(diffMs / (1000 * 60));
+      const diffMs =
+        now.getTime() -
+        logTime.getTime();
 
-      if (diffMins < 0) return "방금 전";
-      if (diffMins < 1) return "방금 전";
-      if (diffMins < 60) return `${diffMins}분 전`;
+      const diffMins =
+        Math.floor(
+          diffMs /
+            (1000 * 60)
+        );
 
-      const diffHours = Math.floor(diffMins / 60);
-      if (diffHours < 24) return `${diffHours}시간 전`;
+      if (
+        diffMins < 0
+      ) {
+        return "방금 전";
+      }
 
-      const diffDays = Math.floor(diffHours / 24);
-      if (diffDays === 1) return "어제";
-      if (diffDays <= 7) return `${diffDays}일 전`;
+      if (
+        diffMins < 1
+      ) {
+        return "방금 전";
+      }
 
-      const year = logTime.getFullYear();
-      const month = String(logTime.getMonth() + 1).padStart(2, "0");
-      const day = String(logTime.getDate()).padStart(2, "0");
+      if (
+        diffMins < 60
+      ) {
+        return `${diffMins}분 전`;
+      }
+
+      const diffHours =
+        Math.floor(
+          diffMins / 60
+        );
+
+      if (
+        diffHours < 24
+      ) {
+        return `${diffHours}시간 전`;
+      }
+
+      const diffDays =
+        Math.floor(
+          diffHours / 24
+        );
+
+      if (
+        diffDays === 1
+      ) {
+        return "어제";
+      }
+
+      if (
+        diffDays <= 7
+      ) {
+        return `${diffDays}일 전`;
+      }
+
+      const year =
+        logTime.getFullYear();
+
+      const month =
+        String(
+          logTime.getMonth() + 1
+        ).padStart(
+          2,
+          "0"
+        );
+
+      const day =
+        String(
+          logTime.getDate()
+        ).padStart(
+          2,
+          "0"
+        );
 
       return `${year}-${month}-${day}`;
     } catch (error) {
-      logHome("시간 표시 처리 실패", error?.message);
+      logHome(
+        "시간 표시 처리 실패",
+        error?.message
+      );
+
       return "시간 오차";
     }
   };
 
-  const extractIntercomLogs = (responseData) => {
-    if (Array.isArray(responseData?.data)) return responseData.data;
-    if (Array.isArray(responseData)) return responseData;
-    if (Array.isArray(responseData?.content)) return responseData.content;
-    if (Array.isArray(responseData?.logs)) return responseData.logs;
-    if (Array.isArray(responseData?.items)) return responseData.items;
-    if (Array.isArray(responseData?.data?.content)) {
-      return responseData.data.content;
+  const extractIntercomLogs = (
+    responseData
+  ) => {
+    if (
+      Array.isArray(
+        responseData?.data
+      )
+    ) {
+      return responseData.data;
     }
-    if (Array.isArray(responseData?.data?.logs)) {
-      return responseData.data.logs;
+
+    if (
+      Array.isArray(
+        responseData
+      )
+    ) {
+      return responseData;
     }
-    if (Array.isArray(responseData?.data?.items)) {
-      return responseData.data.items;
+
+    if (
+      Array.isArray(
+        responseData?.content
+      )
+    ) {
+      return responseData.content;
     }
-    if (Array.isArray(responseData?.result)) return responseData.result;
-    if (Array.isArray(responseData?.data?.result)) {
-      return responseData.data.result;
+
+    if (
+      Array.isArray(
+        responseData?.logs
+      )
+    ) {
+      return responseData.logs;
+    }
+
+    if (
+      Array.isArray(
+        responseData?.items
+      )
+    ) {
+      return responseData.items;
+    }
+
+    if (
+      Array.isArray(
+        responseData
+          ?.data?.content
+      )
+    ) {
+      return responseData
+        .data.content;
+    }
+
+    if (
+      Array.isArray(
+        responseData
+          ?.data?.logs
+      )
+    ) {
+      return responseData
+        .data.logs;
+    }
+
+    if (
+      Array.isArray(
+        responseData
+          ?.data?.items
+      )
+    ) {
+      return responseData
+        .data.items;
+    }
+
+    if (
+      Array.isArray(
+        responseData?.result
+      )
+    ) {
+      return responseData.result;
+    }
+
+    if (
+      Array.isArray(
+        responseData
+          ?.data?.result
+      )
+    ) {
+      return responseData
+        .data.result;
     }
 
     return [];
   };
 
-  const getLogTitle = (log = {}) => {
-    const summary = String(log.summary || "").trim();
-    const visitorText = String(log.visitorText || "").trim();
-    const content = String(log.content || "").trim();
-    const message = String(log.message || "").trim();
-    const transcript = String(log.transcript || "").trim();
+  const getLogTitle = (
+    log = {}
+  ) => {
+    const summary =
+      String(
+        log.summary || ""
+      ).trim();
 
-    if (summary && summary !== "내용 없음") return summary;
-    if (visitorText) return visitorText;
-    if (content) return content;
-    if (message) return message;
-    if (transcript) return transcript;
+    const visitorText =
+      String(
+        log.visitorText || ""
+      ).trim();
+
+    const content =
+      String(
+        log.content || ""
+      ).trim();
+
+    const message =
+      String(
+        log.message || ""
+      ).trim();
+
+    const transcript =
+      String(
+        log.transcript || ""
+      ).trim();
+
+    if (
+      summary &&
+      summary !== "내용 없음"
+    ) {
+      return summary;
+    }
+
+    if (visitorText) {
+      return visitorText;
+    }
+
+    if (content) {
+      return content;
+    }
+
+    if (message) {
+      return message;
+    }
+
+    if (transcript) {
+      return transcript;
+    }
 
     return "인터폰 호출 알림";
   };
 
-  const getLogIntent = (log = {}) => {
-    return String(log.intent || log.category || "").trim();
+  const getLogIntent = (
+    log = {}
+  ) => {
+    return String(
+      log.intent ||
+        log.category ||
+        ""
+    ).trim();
   };
 
-  const mapRecentLogItem = (log = {}, index = 0) => {
-    const logId = log.logId ?? log.id ?? log.intercomLogId ?? index;
+  const mapRecentLogItem = (
+    log = {},
+    index = 0
+  ) => {
+    const logId =
+      log.logId ??
+      log.id ??
+      log.intercomLogId ??
+      index;
+
     const sessionId =
       log.sessionId ??
       log.callSessionId ??
@@ -338,521 +722,1043 @@ export default function HomeScreen() {
       log.session?.id ??
       null;
 
-    const createdAt = getLogDateValue(log);
-    const intent = getLogIntent(log);
+    const createdAt =
+      getLogDateValue(log);
+
+    const intent =
+      getLogIntent(log);
 
     return {
       ...log,
       id: logId,
       logId,
       sessionId,
-      title: getLogTitle(log),
-      time: formatTimeGap(createdAt),
-      type: intent === "DELIVERY" ? "message" : "bell",
-      tags: intent ? [intent] : ["방문"],
-      deviceUid: log.deviceUid || log.deviceId || log.device?.deviceUid,
+      title:
+        getLogTitle(log),
+      time:
+        formatTimeGap(
+          createdAt
+        ),
+      type:
+        intent === "DELIVERY"
+          ? "message"
+          : "bell",
+      tags:
+        intent
+          ? [intent]
+          : ["방문"],
+      deviceUid:
+        log.deviceUid ||
+        log.deviceId ||
+        log.device?.deviceUid,
       createdAt,
       raw: log,
     };
   };
 
-  const stopRingSound = () => {
-    try {
-      ringPlayer.pause();
-      ringPlayer.seekTo(0).catch((error) => {
-        logHome("호출 벨소리 위치 초기화 실패", error?.message);
-      });
-    } catch (error) {
-      logHome("호출 벨소리 중지 실패", error?.message);
-    }
-  };
-
-  const triggerHardwareAlert = async (status) => {
-    try {
-      if (status === "incoming") {
-        const [vibSetting, soundSetting] = await Promise.all([
-          AsyncStorage.getItem("callVibrate"),
-          AsyncStorage.getItem("callSound"),
-        ]);
-
-        logHome("호출 알림 설정 확인", {
-          callVibrate: vibSetting,
-          callSound: soundSetting,
-        });
-
-        if (vibSetting === "true") {
-          Vibration.vibrate([0, 1000, 1000], true);
-          logHome("호출 진동 시작");
+  const stopRingSound =
+    async () => {
+      try {
+        if (
+          ringPlayer.playing
+        ) {
+          ringPlayer.pause();
         }
 
-        if (soundSetting === "true") {
-          await ringPlayer.seekTo(0);
-          ringPlayer.loop = true;
-          ringPlayer.volume = 1;
-          ringPlayer.play();
-          logHome("호출 벨소리 시작");
+        await ringPlayer.seekTo(
+          0
+        );
+      } catch (error) {
+        logHome(
+          "호출 벨소리 중지 실패",
+          error?.message
+        );
+      }
+    };
+
+  const triggerHardwareAlert =
+    async (status) => {
+      try {
+        if (
+          status === "incoming"
+        ) {
+          const [
+            vibSetting,
+            soundSetting,
+          ] =
+            await Promise.all([
+              AsyncStorage.getItem(
+                "callVibrate"
+              ),
+              AsyncStorage.getItem(
+                "callSound"
+              ),
+            ]);
+
+          logHome(
+            "호출 알림 설정 확인",
+            {
+              callVibrate:
+                vibSetting,
+              callSound:
+                soundSetting,
+            }
+          );
+
+          if (
+            vibSetting ===
+            "true"
+          ) {
+            Vibration.vibrate(
+              [
+                0,
+                1000,
+                1000,
+              ],
+              true
+            );
+
+            logHome(
+              "호출 진동 시작"
+            );
+          }
+
+          if (
+            soundSetting ===
+            "true"
+          ) {
+            await ringPlayer.seekTo(
+              0
+            );
+
+            ringPlayer.loop =
+              true;
+
+            ringPlayer.volume =
+              1;
+
+            ringPlayer.play();
+
+            logHome(
+              "호출 벨소리 시작"
+            );
+          }
+        } else {
+          Vibration.cancel();
+
+          await stopRingSound();
+
+          logHome(
+            "호출 알림 중지"
+          );
         }
-      } else {
-        Vibration.cancel();
-        stopRingSound();
-        logHome("호출 알림 중지");
+      } catch (error) {
+        logHome(
+          "호출 알림 제어 실패",
+          error?.message
+        );
       }
-    } catch (error) {
-      logHome("호출 알림 제어 실패", error?.message);
-    }
-  };
+    };
 
-  const fetchRecentLogs = async (savedToken) => {
-    if (!savedToken) {
-      if (isMountedRef.current) {
-        setRecentCalls([]);
+  const fetchRecentLogs =
+    async (savedToken) => {
+      if (!savedToken) {
+        if (
+          isMountedRef.current
+        ) {
+          setRecentCalls([]);
+        }
+
+        logHome(
+          "최근 호출 이력 조회 생략 - accessToken 없음"
+        );
+
+        return;
       }
-
-      logHome("최근 호출 이력 조회 생략 - accessToken 없음");
-      return;
-    }
-
-    try {
-      const logResponse = await axios.get(`${BASE_URL}/api/intercom-logs`, {
-        headers: {
-          Authorization: `Bearer ${savedToken}`,
-        },
-      });
-
-      const rawLogs = extractIntercomLogs(logResponse.data);
-
-      logHome("최근 호출 이력 원본 응답", {
-        isArrayResponse: Array.isArray(logResponse.data),
-        success: logResponse.data?.success,
-        rawCount: rawLogs.length,
-      });
-
-      const mappedLogs = rawLogs
-        .filter((log) => log)
-        .sort((a, b) => getSortTime(b) - getSortTime(a))
-        .slice(0, 4)
-        .map(mapRecentLogItem);
-
-      if (isMountedRef.current) {
-        setRecentCalls(mappedLogs);
-      }
-
-      logHome("최근 호출 이력 조회 완료", {
-        total: rawLogs.length,
-        displayed: mappedLogs.length,
-      });
-    } catch (error) {
-      const serverError =
-        error.response?.data?.message ||
-        JSON.stringify(error.response?.data) ||
-        error.message;
-
-      logHome("최근 호출 이력 조회 실패", serverError);
-
-      if (isMountedRef.current) {
-        setRecentCalls([]);
-      }
-    }
-  };
-
-  const resolveCurrentSessionData = (responseData) => {
-    if (!responseData) return null;
-
-    if (Object.prototype.hasOwnProperty.call(responseData, "data")) {
-      return responseData.data || null;
-    }
-
-    return responseData;
-  };
-
-  const requestCurrentSession = async (savedToken, deviceUid) => {
-    const response = await axios.get(`${BASE_URL}/api/sessions/current`, {
-      headers: {
-        ...(savedToken ? { Authorization: `Bearer ${savedToken}` } : {}),
-      },
-      params: {
-        deviceUid,
-      },
-    });
-
-    if (!response.data?.success) return null;
-
-    return resolveCurrentSessionData(response.data);
-  };
-
-  const checkHomeActiveSession = async (isSilent = false) => {
-    let savedToken = null;
-
-    try {
-      if (!isSilent && isMountedRef.current) {
-        setIsLoading(true);
-        logHome("홈 상태 초기 조회 시작");
-      }
-
-      savedToken = await AsyncStorage.getItem("accessToken");
-
-      if (isMountedRef.current) {
-        setToken(savedToken);
-      }
-
-      const deviceUid = await getDeviceUid();
-
-      logHome("현재 세션 조회 요청", {
-        deviceUid,
-        hasToken: Boolean(savedToken),
-        silent: isSilent,
-      });
-
-      let sessionData = null;
 
       try {
-        sessionData = await requestCurrentSession(savedToken, deviceUid);
+        const logResponse =
+          await axios.get(
+            `${BASE_URL}/api/intercom-logs`,
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${savedToken}`,
+              },
+            }
+          );
+
+        const rawLogs =
+          extractIntercomLogs(
+            logResponse.data
+          );
+
+        logHome(
+          "최근 호출 이력 원본 응답",
+          {
+            isArrayResponse:
+              Array.isArray(
+                logResponse.data
+              ),
+            success:
+              logResponse.data
+                ?.success,
+            rawCount:
+              rawLogs.length,
+          }
+        );
+
+        const mappedLogs =
+          rawLogs
+            .filter(
+              (log) => log
+            )
+            .sort(
+              (a, b) =>
+                getSortTime(b) -
+                getSortTime(a)
+            )
+            .slice(0, 4)
+            .map(
+              mapRecentLogItem
+            );
+
+        if (
+          isMountedRef.current
+        ) {
+          setRecentCalls(
+            mappedLogs
+          );
+        }
+
+        logHome(
+          "최근 호출 이력 조회 완료",
+          {
+            total:
+              rawLogs.length,
+            displayed:
+              mappedLogs.length,
+          }
+        );
       } catch (error) {
         const serverError =
-          error.response?.data?.message ||
-          JSON.stringify(error.response?.data) ||
+          error.response?.data
+            ?.message ||
+          JSON.stringify(
+            error.response?.data
+          ) ||
           error.message;
 
-        logHome("현재 세션 조회 실패", serverError);
+        logHome(
+          "최근 호출 이력 조회 실패",
+          serverError
+        );
+
+        if (
+          isMountedRef.current
+        ) {
+          setRecentCalls([]);
+        }
+      }
+    };
+
+  const resolveCurrentSessionData =
+    (responseData) => {
+      if (!responseData) {
+        return null;
       }
 
-      const nextSessionId = sessionData ? getSessionId(sessionData) : null;
-      const sessionStatus = sessionData ? getSessionStatus(sessionData) : "";
-      const endedAt =
-        sessionData?.endedAt ||
-        sessionData?.endTime ||
-        sessionData?.closedAt ||
+      if (
+        Object.prototype.hasOwnProperty.call(
+          responseData,
+          "data"
+        )
+      ) {
+        return (
+          responseData.data ||
+          null
+        );
+      }
+
+      return responseData;
+    };
+
+  const requestCurrentSession =
+    async (
+      savedToken,
+      deviceUid
+    ) => {
+      const response =
+        await axios.get(
+          `${BASE_URL}/api/sessions/current`,
+          {
+            headers: {
+              ...(savedToken
+                ? {
+                    Authorization:
+                      `Bearer ${savedToken}`,
+                  }
+                : {}),
+            },
+            params: {
+              deviceUid,
+            },
+          }
+        );
+
+      if (
+        !response.data
+          ?.success
+      ) {
+        return null;
+      }
+
+      return resolveCurrentSessionData(
+        response.data
+      );
+    };
+
+  const checkHomeActiveSession =
+    async (
+      isSilent = false
+    ) => {
+      let savedToken =
         null;
 
-      const isIncoming = Boolean(
-        sessionData && nextSessionId && isActiveSession(sessionData)
-      );
+      try {
+        if (
+          !isSilent &&
+          isMountedRef.current
+        ) {
+          setIsLoading(true);
 
-      logHome("현재 세션 응답", {
-        exists: Boolean(sessionData),
-        sessionId: nextSessionId,
-        status: sessionStatus || null,
-        endedAt,
-        isIncoming,
-        raw: sessionData,
-      });
+          logHome(
+            "홈 상태 초기 조회 시작"
+          );
+        }
 
-      const previousStatus = intercomStatusRef.current;
+        savedToken =
+          await AsyncStorage.getItem(
+            "accessToken"
+          );
 
-      if (isIncoming) {
-        if (intercomStatusRef.current !== "incoming") {
-          triggerHardwareAlert("incoming");
+        if (
+          isMountedRef.current
+        ) {
+          setToken(
+            savedToken
+          );
+        }
+
+        const deviceUid =
+          await getDeviceUid();
+
+        logHome(
+          "현재 세션 조회 요청",
+          {
+            deviceUid,
+            hasToken:
+              Boolean(
+                savedToken
+              ),
+            silent:
+              isSilent,
+          }
+        );
+
+        let sessionData =
+          null;
+
+        try {
+          sessionData =
+            await requestCurrentSession(
+              savedToken,
+              deviceUid
+            );
+        } catch (error) {
+          const serverError =
+            error.response
+              ?.data?.message ||
+            JSON.stringify(
+              error.response
+                ?.data
+            ) ||
+            error.message;
+
+          logHome(
+            "현재 세션 조회 실패",
+            serverError
+          );
+        }
+
+        const nextSessionId =
+          sessionData
+            ? getSessionId(
+                sessionData
+              )
+            : null;
+
+        const sessionStatus =
+          sessionData
+            ? getSessionStatus(
+                sessionData
+              )
+            : "";
+
+        const endedAt =
+          sessionData?.endedAt ||
+          sessionData?.endTime ||
+          sessionData
+            ?.closedAt ||
+          null;
+
+        const isIncoming =
+          Boolean(
+            sessionData &&
+              nextSessionId &&
+              isActiveSession(
+                sessionData
+              )
+          );
+
+        logHome(
+          "현재 세션 응답",
+          {
+            exists:
+              Boolean(
+                sessionData
+              ),
+            sessionId:
+              nextSessionId,
+            status:
+              sessionStatus ||
+              null,
+            endedAt,
+            isIncoming,
+            raw:
+              sessionData,
+          }
+        );
+
+        const previousStatus =
+          intercomStatusRef.current;
+
+        if (
+          isIncoming
+        ) {
+          if (
+            intercomStatusRef.current !==
+            "incoming"
+          ) {
+            triggerHardwareAlert(
+              "incoming"
+            );
+          }
+
+          updateIntercomStatus(
+            "incoming",
+            "active session detected",
+            nextSessionId
+          );
+        } else {
+          if (
+            intercomStatusRef.current ===
+            "incoming"
+          ) {
+            triggerHardwareAlert(
+              "idle"
+            );
+          }
+
+          updateIntercomStatus(
+            "idle",
+            "no active session",
+            null
+          );
+        }
+
+        if (
+          !isSilent ||
+          previousStatus !==
+            intercomStatusRef.current
+        ) {
+          await fetchRecentLogs(
+            savedToken
+          );
+        }
+      } catch (error) {
+        const serverError =
+          error.response?.data
+            ?.message ||
+          JSON.stringify(
+            error.response?.data
+          ) ||
+          error.message;
+
+        logHome(
+          "홈 화면 상태 조회 실패",
+          serverError
+        );
+
+        if (
+          intercomStatusRef.current ===
+          "incoming"
+        ) {
+          triggerHardwareAlert(
+            "idle"
+          );
         }
 
         updateIntercomStatus(
-          "incoming",
-          "active session detected",
-          nextSessionId
+          "idle",
+          "home status error",
+          null
         );
-      } else {
-        if (intercomStatusRef.current === "incoming") {
-          triggerHardwareAlert("idle");
+
+        if (
+          !isSilent &&
+          savedToken
+        ) {
+          await fetchRecentLogs(
+            savedToken
+          );
         }
-
-        updateIntercomStatus("idle", "no active session", null);
-      }
-
-      if (!isSilent || previousStatus !== intercomStatusRef.current) {
-        await fetchRecentLogs(savedToken);
-      }
-    } catch (error) {
-      const serverError =
-        error.response?.data?.message ||
-        JSON.stringify(error.response?.data) ||
-        error.message;
-
-      logHome("홈 화면 상태 조회 실패", serverError);
-
-      if (intercomStatusRef.current === "incoming") {
-        triggerHardwareAlert("idle");
-      }
-
-      updateIntercomStatus("idle", "home status error", null);
-
-      if (!isSilent && savedToken) {
-        await fetchRecentLogs(savedToken);
-      }
-    } finally {
-      if (!isSilent && isMountedRef.current) {
-        setIsLoading(false);
-      }
-    }
-  };
-
-  useEffect(() => {
-    const setupAudio = async () => {
-      try {
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          shouldRouteThroughEarpiece: false,
-          interruptionMode: "doNotMix",
-        });
-        ringPlayer.loop = true;
-        ringPlayer.volume = 1;
-      } catch (error) {
-        logHome("오디오 설정 실패", error?.message);
+      } finally {
+        if (
+          !isSilent &&
+          isMountedRef.current
+        ) {
+          setIsLoading(false);
+        }
       }
     };
+
+  useEffect(() => {
+    const setupAudio =
+      async () => {
+        try {
+          await setAudioModeAsync({
+            playsInSilentMode:
+              true,
+            shouldRouteThroughEarpiece:
+              false,
+            interruptionMode:
+              "doNotMix",
+          });
+
+          ringPlayer.loop =
+            true;
+
+          ringPlayer.volume =
+            1;
+        } catch (error) {
+          logHome(
+            "오디오 설정 실패",
+            error?.message
+          );
+        }
+      };
 
     setupAudio();
   }, [ringPlayer]);
 
   useEffect(() => {
-    isMountedRef.current = true;
+    isMountedRef.current =
+      true;
 
     return () => {
-      isMountedRef.current = false;
+      isMountedRef.current =
+        false;
+
       Vibration.cancel();
-      stopRingSound();
     };
   }, []);
 
   useEffect(() => {
-    const routeStatus = route.params?.intercomStatus;
-    const routeSessionId = route.params?.activeSessionId ?? null;
+    const routeStatus =
+      route.params
+        ?.intercomStatus;
 
-    if (routeStatus === "idle" && !routeSessionId) {
-      updateIntercomStatus("idle", "route params idle", null);
+    const routeSessionId =
+      route.params
+        ?.activeSessionId ??
+      null;
+
+    if (
+      routeStatus ===
+        "idle" &&
+      !routeSessionId
+    ) {
+      updateIntercomStatus(
+        "idle",
+        "route params idle",
+        null
+      );
+
       Vibration.cancel();
+
       stopRingSound();
     }
   }, [
     route.params?.refresh,
-    route.params?.intercomStatus,
-    route.params?.activeSessionId,
+    route.params
+      ?.intercomStatus,
+    route.params
+      ?.activeSessionId,
   ]);
 
   useEffect(() => {
-    let pollingTimer = null;
+    let pollingTimer =
+      null;
 
     if (isFocused) {
-      logHome("화면 포커스 - polling 시작");
+      logHome(
+        "화면 포커스 - polling 시작"
+      );
 
-      checkHomeActiveSession(false);
+      checkHomeActiveSession(
+        false
+      );
 
-      pollingTimer = setInterval(() => {
-        checkHomeActiveSession(true);
-      }, 3000);
+      pollingTimer =
+        setInterval(() => {
+          checkHomeActiveSession(
+            true
+          );
+        }, 3000);
     }
 
     return () => {
       Vibration.cancel();
+
       stopRingSound();
-
-      if (pollingTimer) {
-        clearInterval(pollingTimer);
-        logHome("화면 이탈 - polling 중지");
-      }
-    };
-  }, [isFocused, activeSessionId]);
-
-  const handleStatusCardPress = async () => {
-    logHome("상태 카드 클릭", {
-      intercomStatus,
-      activeSessionId: activeSessionId || activeSessionIdRef.current,
-    });
-
-    if (intercomStatus === "disconnected") {
-      navigation.navigate("QrVerify");
-      return;
-    }
-
-    if (intercomStatus !== "incoming") {
-      navigation.navigate("MainTab", {
-        screen: "히스토리",
-        params: {
-          refresh: Date.now(),
-        },
-      });
-      return;
-    }
-
-    try {
-      Vibration.cancel();
-      stopRingSound();
-
-      const savedToken = token || (await AsyncStorage.getItem("accessToken"));
-      const deviceUid = await getDeviceUid();
-
-      if (!savedToken) {
-        Alert.alert("안내", "로그인이 필요합니다.");
-        updateIntercomStatus("idle", "missing token before enter", null);
-        return;
-      }
-
-      const currentSession = await requestCurrentSession(savedToken, deviceUid);
-      const currentSessionId = getSessionId(currentSession);
 
       if (
-        !currentSession ||
-        !currentSessionId ||
-        !isActiveSession(currentSession)
+        pollingTimer
       ) {
-        updateIntercomStatus("idle", "stale session before enter", null);
-        await fetchRecentLogs(savedToken);
+        clearInterval(
+          pollingTimer
+        );
 
-        Alert.alert("안내", "이미 종료된 통화입니다.");
+        logHome(
+          "화면 이탈 - polling 중지"
+        );
+      }
+    };
+  }, [isFocused]);
+
+  const handleStatusCardPress =
+    async () => {
+      logHome(
+        "상태 카드 클릭",
+        {
+          intercomStatus,
+          activeSessionId:
+            activeSessionId ||
+            activeSessionIdRef.current,
+        }
+      );
+
+      if (
+        intercomStatus ===
+        "disconnected"
+      ) {
+        navigation.navigate(
+          "QrVerify"
+        );
+
         return;
       }
 
-      updateIntercomStatus(
-        "incoming",
-        "verified before enter",
-        currentSessionId
-      );
+      if (
+        intercomStatus !==
+        "incoming"
+      ) {
+        navigation.navigate(
+          "MainTab",
+          {
+            screen:
+              "히스토리",
+            params: {
+              refresh:
+                Date.now(),
+            },
+          }
+        );
 
-      navigation.navigate("인터폰", {
-        sessionId: currentSessionId,
-        activeSessionId: currentSessionId,
-        intercomStatus: "incoming",
-        enteredFrom: "home",
-        refreshKey: Date.now(),
-        token: savedToken,
-        deviceUid,
-      });
-    } catch (error) {
-      const serverError =
-        error.response?.data?.message ||
-        JSON.stringify(error.response?.data) ||
-        error.message;
-
-      logHome("인터폰 진입 전 세션 확인 실패", serverError);
-
-      updateIntercomStatus("idle", "session verification error", null);
-
-      const savedToken = token || (await AsyncStorage.getItem("accessToken"));
-      if (savedToken) {
-        await fetchRecentLogs(savedToken);
+        return;
       }
 
-      Alert.alert("안내", "현재 진행 중인 통화가 없습니다.");
-    }
-  };
+      try {
+        Vibration.cancel();
 
-  const handlePressRecentCall = (item) => {
-    logHome("최근 호출 상세 이동", {
-      logId: item.logId || item.id,
-      sessionId: item.sessionId,
-    });
+        await stopRingSound();
 
-    navigation.navigate("End", {
-      item,
-      logId: item.logId || item.id,
-      sessionId: item.sessionId,
-      token,
-    });
-  };
+        const savedToken =
+          token ||
+          (await AsyncStorage.getItem(
+            "accessToken"
+          ));
+
+        const deviceUid =
+          await getDeviceUid();
+
+        if (!savedToken) {
+          Alert.alert(
+            "안내",
+            "로그인이 필요합니다."
+          );
+
+          updateIntercomStatus(
+            "idle",
+            "missing token before enter",
+            null
+          );
+
+          return;
+        }
+
+        const currentSession =
+          await requestCurrentSession(
+            savedToken,
+            deviceUid
+          );
+
+        const currentSessionId =
+          getSessionId(
+            currentSession
+          );
+
+        if (
+          !currentSession ||
+          !currentSessionId ||
+          !isActiveSession(
+            currentSession
+          )
+        ) {
+          updateIntercomStatus(
+            "idle",
+            "stale session before enter",
+            null
+          );
+
+          await fetchRecentLogs(
+            savedToken
+          );
+
+          Alert.alert(
+            "안내",
+            "이미 종료된 통화입니다."
+          );
+
+          return;
+        }
+
+        updateIntercomStatus(
+          "incoming",
+          "verified before enter",
+          currentSessionId
+        );
+
+        navigation.navigate(
+          "인터폰",
+          {
+            sessionId:
+              currentSessionId,
+            activeSessionId:
+              currentSessionId,
+            intercomStatus:
+              "incoming",
+            enteredFrom:
+              "home",
+            refreshKey:
+              Date.now(),
+            token:
+              savedToken,
+            deviceUid,
+          }
+        );
+      } catch (error) {
+        const serverError =
+          error.response?.data
+            ?.message ||
+          JSON.stringify(
+            error.response?.data
+          ) ||
+          error.message;
+
+        logHome(
+          "인터폰 진입 전 세션 확인 실패",
+          serverError
+        );
+
+        updateIntercomStatus(
+          "idle",
+          "session verification error",
+          null
+        );
+
+        const savedToken =
+          token ||
+          (await AsyncStorage.getItem(
+            "accessToken"
+          ));
+
+        if (savedToken) {
+          await fetchRecentLogs(
+            savedToken
+          );
+        }
+
+        Alert.alert(
+          "안내",
+          "현재 진행 중인 통화가 없습니다."
+        );
+      }
+    };
+
+  const handlePressRecentCall =
+    (item) => {
+      logHome(
+        "최근 호출 상세 이동",
+        {
+          logId:
+            item.logId ||
+            item.id,
+          sessionId:
+            item.sessionId,
+        }
+      );
+
+      navigation.navigate(
+        "End",
+        {
+          item,
+          logId:
+            item.logId ||
+            item.id,
+          sessionId:
+            item.sessionId,
+          token,
+        }
+      );
+    };
 
   return (
     <Container>
       <Header>
         <HeaderLeft>
-          <Logo source={bellIcon} resizeMode="contain" />
+          <Logo
+            source={bellIcon}
+            resizeMode="contain"
+          />
+
           <HeaderTitle>
-            {intercomStatus === "disconnected" ? "로그인 완료" : "홈"}
+            {intercomStatus ===
+            "disconnected"
+              ? "로그인 완료"
+              : "홈"}
           </HeaderTitle>
         </HeaderLeft>
 
         <TouchableOpacity
-          onPress={() => setModalVisible(true)}
-          style={{ flexDirection: "row", alignItems: "center" }}
+          onPress={() =>
+            setModalVisible(
+              true
+            )
+          }
+          style={{
+            flexDirection:
+              "row",
+            alignItems:
+              "center",
+          }}
         >
-          <Ionicons name="information-circle-outline" size={22} color="#555" />
-          <InfoBtnText>앱 사용법</InfoBtnText>
+          <Ionicons
+            name="information-circle-outline"
+            size={22}
+            color="#555"
+          />
+
+          <InfoBtnText>
+            앱 사용법
+          </InfoBtnText>
         </TouchableOpacity>
       </Header>
 
       <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ flexGrow: 1, paddingBottom: 30 }}
+        showsVerticalScrollIndicator={
+          false
+        }
+        contentContainerStyle={{
+          flexGrow: 1,
+          paddingBottom: 30,
+        }}
       >
         <SystemBlockContainer>
-          <SystemMainLabel>인터폰 대화 연결 시스템</SystemMainLabel>
+          <SystemMainLabel>
+            인터폰 대화 연결 시스템
+          </SystemMainLabel>
         </SystemBlockContainer>
 
         {isLoading ? (
           <LoadingWrapper>
-            <ActivityIndicator size="small" color="#06F393" />
+            <ActivityIndicator
+              size="small"
+              color="#06F393"
+            />
           </LoadingWrapper>
         ) : (
           <MainBannerActionCard
             activeOpacity={0.7}
-            onPress={handleStatusCardPress}
+            onPress={
+              handleStatusCardPress
+            }
           >
             <BannerLeftContainer>
               <MicIconWrapper
                 bgColor={
-                  intercomStatus === "disconnected" ? "#EAEAEA" : "#F5F5F5"
+                  intercomStatus ===
+                  "disconnected"
+                    ? "#EAEAEA"
+                    : "#F5F5F5"
                 }
               >
                 <Ionicons
-                  name={intercomStatus === "disconnected" ? "mic-off" : "mic"}
+                  name={
+                    intercomStatus ===
+                    "disconnected"
+                      ? "mic-off"
+                      : "mic"
+                  }
                   size={24}
-                  color={intercomStatus === "incoming" ? "#06F393" : "#999"}
+                  color={
+                    intercomStatus ===
+                    "incoming"
+                      ? "#06F393"
+                      : "#999"
+                  }
                 />
               </MicIconWrapper>
 
               <BannerTextGroup>
                 <BannerMainTitle>
-                  {intercomStatus === "disconnected" &&
+                  {intercomStatus ===
+                    "disconnected" &&
                     "인터폰 장치가 연결되지 않았습니다."}
-                  {intercomStatus === "incoming" &&
+
+                  {intercomStatus ===
+                    "incoming" &&
                     "인터폰 호출이 들어왔습니다."}
-                  {intercomStatus === "idle" && "인터폰 호출 대기 중입니다."}
+
+                  {intercomStatus ===
+                    "idle" &&
+                    "인터폰 호출 대기 중입니다."}
                 </BannerMainTitle>
 
                 <BannerSubDescription>
-                  {intercomStatus === "disconnected" &&
+                  {intercomStatus ===
+                    "disconnected" &&
                     "QR 인증을 진행해 주세요."}
-                  {intercomStatus === "incoming" &&
+
+                  {intercomStatus ===
+                    "incoming" &&
                     "눌러서 실시간 대화를 확인하세요."}
-                  {intercomStatus === "idle" &&
+
+                  {intercomStatus ===
+                    "idle" &&
                     "현재 걸려온 인터폰 호출이 없습니다."}
                 </BannerSubDescription>
               </BannerTextGroup>
             </BannerLeftContainer>
 
-            {intercomStatus === "disconnected" && (
-              <ActionButtonStyle bgColor="#4A72B2">
-                <ActionBtnText>QR 인증</ActionBtnText>
+            {intercomStatus ===
+              "disconnected" && (
+              <ActionButtonStyle
+                bgColor="#4A72B2"
+              >
+                <ActionBtnText>
+                  QR 인증
+                </ActionBtnText>
               </ActionButtonStyle>
             )}
 
-            {intercomStatus === "incoming" && (
-              <ActionButtonStyle bgColor="#06F393">
-                <ActionBtnText>확인</ActionBtnText>
+            {intercomStatus ===
+              "incoming" && (
+              <ActionButtonStyle
+                bgColor="#06F393"
+              >
+                <ActionBtnText>
+                  확인
+                </ActionBtnText>
               </ActionButtonStyle>
             )}
 
-            {intercomStatus === "idle" && (
-              <ActionButtonStyle bgColor="#EAEAEA">
-                <ActionBtnText style={{ color: "#999" }}>대기</ActionBtnText>
+            {intercomStatus ===
+              "idle" && (
+              <ActionButtonStyle
+                bgColor="#EAEAEA"
+              >
+                <ActionBtnText
+                  style={{
+                    color:
+                      "#999",
+                  }}
+                >
+                  대기
+                </ActionBtnText>
               </ActionButtonStyle>
             )}
           </MainBannerActionCard>
         )}
 
-        <SectionTitle>최근 호출 이력</SectionTitle>
+        <SectionTitle>
+          최근 호출 이력
+        </SectionTitle>
 
-        <ResultListGroup style={{ flex: 1 }}>
-          {recentCalls.length > 0 ? (
-            recentCalls.map((item, idx) => (
-              <RecentCallItem
-                key={item.id || idx}
-                item={item}
-                token={token || "READY"}
-                onPress={() => handlePressRecentCall(item)}
-              />
-            ))
+        <ResultListGroup
+          style={{
+            flex: 1,
+          }}
+        >
+          {recentCalls.length >
+          0 ? (
+            recentCalls.map(
+              (
+                item,
+                idx
+              ) => (
+                <RecentCallItem
+                  key={
+                    item.id ||
+                    idx
+                  }
+                  item={
+                    item
+                  }
+                  token={
+                    token ||
+                    "READY"
+                  }
+                  onPress={() =>
+                    handlePressRecentCall(
+                      item
+                    )
+                  }
+                />
+              )
+            )
           ) : (
             <EmptyHistoryContainer>
-              <Ionicons name="chatbubbles-outline" size={40} color="#DDD" />
-              <EmptyHistoryText>최근 호출된 기록이 없습니다.</EmptyHistoryText>
+              <Ionicons
+                name="chatbubbles-outline"
+                size={40}
+                color="#DDD"
+              />
+
+              <EmptyHistoryText>
+                최근 호출된 기록이 없습니다.
+              </EmptyHistoryText>
             </EmptyHistoryContainer>
           )}
         </ResultListGroup>
@@ -861,26 +1767,74 @@ export default function HomeScreen() {
       <Modal
         animationType="fade"
         transparent
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
+        visible={
+          modalVisible
+        }
+        onRequestClose={() =>
+          setModalVisible(
+            false
+          )
+        }
       >
-        <ModalOverlay activeOpacity={1} onPress={() => setModalVisible(false)}>
+        <ModalOverlay
+          activeOpacity={1}
+          onPress={() =>
+            setModalVisible(
+              false
+            )
+          }
+        >
           <ModalContent>
             <ModalHeader>
-              <ModalHeaderText>앱 사용법</ModalHeaderText>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
-                <Ionicons name="close" size={24} color="#333" />
+              <ModalHeaderText>
+                앱 사용법
+              </ModalHeaderText>
+
+              <TouchableOpacity
+                onPress={() =>
+                  setModalVisible(
+                    false
+                  )
+                }
+              >
+                <Ionicons
+                  name="close"
+                  size={24}
+                  color="#333"
+                />
               </TouchableOpacity>
             </ModalHeader>
 
-            <GuideText>1. 인터폰 호출 알림을 확인합니다.</GuideText>
-            <GuideText>2. 앱에서 실시간 자막을 확인합니다.</GuideText>
-            <GuideText>3. 빠른 응답 또는 직접 입력으로 답변합니다.</GuideText>
-            <GuideText>4. 답변이 인터폰 스피커로 전달됩니다.</GuideText>
-            <GuideText>5. 통화 종료 후 기록을 확인할 수 있습니다.</GuideText>
+            <GuideText>
+              1. 인터폰 호출 알림을 확인합니다.
+            </GuideText>
 
-            <CloseBtn onPress={() => setModalVisible(false)}>
-              <CloseBtnText>확인</CloseBtnText>
+            <GuideText>
+              2. 앱에서 실시간 자막을 확인합니다.
+            </GuideText>
+
+            <GuideText>
+              3. 빠른 응답 또는 직접 입력으로 답변합니다.
+            </GuideText>
+
+            <GuideText>
+              4. 답변이 인터폰 스피커로 전달됩니다.
+            </GuideText>
+
+            <GuideText>
+              5. 통화 종료 후 기록을 확인할 수 있습니다.
+            </GuideText>
+
+            <CloseBtn
+              onPress={() =>
+                setModalVisible(
+                  false
+                )
+              }
+            >
+              <CloseBtnText>
+                확인
+              </CloseBtnText>
             </CloseBtn>
           </ModalContent>
         </ModalOverlay>
@@ -889,7 +1843,9 @@ export default function HomeScreen() {
   );
 }
 
-const Container = styled(SafeAreaContainer)`
+const Container = styled(
+  SafeAreaContainer
+)`
   flex: 1;
   background-color: #FFFFFF;
 `;
@@ -968,7 +1924,8 @@ const MicIconWrapper = styled.View`
   width: 44px;
   height: 44px;
   border-radius: 22px;
-  background-color: ${(props) => props.bgColor};
+  background-color: ${(props) =>
+    props.bgColor};
   justify-content: center;
   align-items: center;
   margin-right: 12px;
@@ -992,7 +1949,8 @@ const BannerSubDescription = styled.Text`
 `;
 
 const ActionButtonStyle = styled.View`
-  background-color: ${(props) => props.bgColor};
+  background-color: ${(props) =>
+    props.bgColor};
   padding: 10px 16px;
   border-radius: 10px;
   justify-content: center;
@@ -1020,7 +1978,12 @@ const ResultListGroup = styled.View`
 
 const ModalOverlay = styled.TouchableOpacity`
   flex: 1;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: rgba(
+    0,
+    0,
+    0,
+    0.5
+  );
   justify-content: center;
   align-items: center;
 `;

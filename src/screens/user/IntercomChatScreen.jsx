@@ -290,9 +290,11 @@ export default function IntercomChatScreen() {
   };
 
   const inputBottom =
-    isKeyboardVisible
-      ? keyboardHeight + KEYBOARD_EXTRA_OFFSET
-      : BOTTOM_NAV_HEIGHT;
+  isKeyboardVisible
+    ? Platform.OS === "android"
+      ? 0
+      : keyboardHeight + KEYBOARD_EXTRA_OFFSET
+    : BOTTOM_NAV_HEIGHT;
 
   const messageBottomInset =
     inputBottom +

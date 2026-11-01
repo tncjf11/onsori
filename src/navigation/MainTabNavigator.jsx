@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Platform, Alert } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import styled from "styled-components/native";
@@ -7,6 +7,8 @@ import HomeScreen from "../screens/user/HomeScreen";
 import IntercomChatScreen from "../screens/user/IntercomChatScreen";
 import HistoryScreen from "../screens/user/HistoryScreen";
 import SettingScreen from "../screens/user/SettingScreen";
+
+import { registerPushToken } from "../services/pushNotificationService";
 
 const tabHome = require("../assets/tab_home.png");
 const tabIntercom = require("../assets/tab_call.png");
@@ -48,6 +50,20 @@ const logMainTab = (message, data) => {
 };
 
 export default function MainTabNavigator() {
+  useEffect(() => {
+    const initializePush = async () => {
+      const result = await registerPushToken();
+
+      logMainTab("Push Token 등록 결과", {
+        success: result?.success,
+        alreadyRegistered: result?.alreadyRegistered,
+        reason: result?.reason,
+      });
+    };
+
+    initializePush();
+  }, []);
+
   const getTabIcon = (routeName) => {
     if (routeName === "홈") return tabHome;
     if (routeName === "인터폰") return tabIntercom;
